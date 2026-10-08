@@ -50,3 +50,7 @@ Windows確認結果: `python tools/verify_project.py` 成功。57個のプロジ
 |操作機器・アクセシビリティ|Trackpad、⌘O、⌘R、Esc、矢印キー、VoiceOver、最大Dynamic Typeで操作可能|未実施|
 
 SimulatorだけではiCloudの権限・File Provider、外部画面出力を十分検証できません。iPhone / iPad実機、接続先の機種、OSバージョン、採用したXcodeとSDKを別途記録してください。iOS 27以降の新しいシーンアクセサリー登録は未対応です。
+
+## 2026-10-08 端末インストール準備
+
+現在のcom.example.PresentationViewerの署名済みコピーを作業成果物vespera-installへ配置。既存ワイルドカードprofileと既存identityのオフラインcodesignで作成し、codesign --verify --deep --strict成功。Apple側の資産、新規証明書、認証・署名・信頼設定、権限は変更していない。Xcode管理profileを手動指定したbuildは不一致で失敗し、自動署名はauto-reviewにより新規管理資産更新のリスクで拒否されたため、既存資産だけの安全な署名方法を使用。接続実名Vesperaと依頼表記Vesparaの対象確認待ちで、インストール・起動は未実施。
