@@ -54,3 +54,7 @@ SimulatorだけではiCloudの権限・File Provider、外部画面出力を十�
 ## 2026-10-08 端末インストール準備
 
 現在のcom.example.PresentationViewerの署名済みコピーを作業成果物vespera-installへ配置。既存ワイルドカードprofileと既存identityのオフラインcodesignで作成し、codesign --verify --deep --strict成功。Apple側の資産、新規証明書、認証・署名・信頼設定、権限は変更していない。Xcode管理profileを手動指定したbuildは不一致で失敗し、自動署名はauto-reviewにより新規管理資産更新のリスクで拒否されたため、既存資産だけの安全な署名方法を使用。接続実名Vesperaと依頼表記Vesparaの対象確認待ちで、インストール・起動は未実施。
+
+## 2026-10-08 Vesperaへのインストール
+
+本人が実名Vespera（iPhone17e）を対象と明示確認後、名前とUDID末尾0E33401Cを再照合。既存profile／identityで署名・検証済みコピーをdevicectlでこの端末だけへインストールし成功。com.example.PresentationViewerのlaunch成功、PID26275。後続の端末process一覧で存在、apps一覧で登録を確認。Photo Hubも同じ端末でインストール・起動成功。アンインストール、ストレージ初期化、追加権限の承諾、Developer Mode／信頼／認証設定変更なし。確認範囲はインストール登録とプロセス起動までで、画面・資料閲覧・フォルダ権限は未確認。my-keyboardは既存App Groups対応profile不足で保留。
