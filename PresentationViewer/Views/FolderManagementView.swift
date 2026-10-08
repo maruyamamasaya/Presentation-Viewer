@@ -30,6 +30,7 @@ struct FolderManagementView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { await store.refresh() } } label: { Label("更新", systemImage: "arrow.clockwise") }
+                    .keyboardShortcut("r", modifiers: .command)
                     .disabled(store.refreshing)
             }
             ToolbarItem(placement: .topBarLeading) { EditButton() }

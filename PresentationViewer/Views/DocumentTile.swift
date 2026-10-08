@@ -17,11 +17,15 @@ struct DocumentTile: View {
                         .font(.largeTitle).foregroundStyle(.secondary)
                 }
             }
-            .frame(height: 140)
-            Text(item.name).font(.subheadline).lineLimit(2)
+            .aspectRatio(4 / 3, contentMode: .fit)
+            .clipped()
+            .accessibilityHidden(true)
+            Text(item.name).font(.subheadline).lineLimit(2).truncationMode(.middle)
                 .foregroundStyle(.primary)
             Text(item.format.rawValue.uppercased()).font(.caption).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .task(id: item.thumbnailKey + folder.bookmark.base64EncodedString()) {
             thumbnail = nil
             let image = await ThumbnailService.shared.image(for: item, folder: folder)

@@ -1,10 +1,10 @@
 # Presentation Viewer
 
-iPhone用の資料閲覧専用SwiftUIアプリ。iOS 17以降。外部ライブラリ、サーバー、認証、データベースなし。
+iPhone・iPad用の資料閲覧専用SwiftUIユニバーサルアプリ。iOS / iPadOS 17以降。外部ライブラリ、サーバー、認証、データベースなし。
 
 ## 開く・実行する
 
-MacのXcode 15以降で `PresentationViewer.xcodeproj` を開き、`PresentationViewer` SchemeとiPhone Simulatorを選択してRunします。実機ではSigning & Capabilitiesで自分のTeamと固有のBundle Identifierを設定してください。現状のBundle Identifierは `com.example.PresentationViewer` です。
+MacのXcode 15以降（iOS 17 SDK以降）で `PresentationViewer.xcodeproj` を開き、`PresentationViewer` SchemeとiPhone / iPad Simulatorを選択してRunします。実機ではSigning & Capabilitiesで自分のTeamと固有のBundle Identifierを設定してください。現状のBundle Identifierは `com.example.PresentationViewer` です。WindowsにApple SDKはなく、実際に採用・ビルドしたXcode SDKバージョンは未確定です。
 
 ```sh
 xcodebuild -project PresentationViewer.xcodeproj -scheme PresentationViewer \
@@ -22,6 +22,8 @@ xcodebuild -project PresentationViewer.xcodeproj -scheme PresentationViewer \
 - 資料をタップして閲覧し、「閉じる」でライブラリに戻ります。資料ごとのファイルピッカーは表示しません。
 - 起動・フォアグラウンド復帰、更新ボタン、下に引く操作で再スキャンします。常時監視やバックグラウンド同期はありません。
 - フォルダ管理では追加、スワイプまたは編集による登録解除、アクセスできないフォルダの再選択ができます。登録解除は参照情報だけを削除します。
+- グリッドはウィンドウ幅・Size Class・Dynamic Typeに合わせて列数と余白を調整します。サムネイルは縦横比を維持し、長いファイル名は2行で中央省略します。資料IDをスクロール位置として保持し、回転・サイズ変更時の位置維持をSwiftUIに任せます。完全に同じピクセル位置の維持は保証しません。
+- キーボードは⌘Oでフォルダ追加、⌘Rで更新、Escで閲覧終了（プレゼン中はモード終了）。標準Buttonとポインターのハイライトを使用します。サイドバーは追加していません。
 
 ## 実装とファイルアクセス
 
@@ -40,11 +42,29 @@ iCloudの未ダウンロード資料は、開く際のcoordinated readでFile Pr
 |形式|標準コンポーネント|操作・制約|
 |---|---|---|
 |PPTX|Quick Look|ページ・ズーム等はOSの対応範囲。編集無効。アニメーションやレイアウトの完全再現は保証しません。|
-|PDF|PDFKit|連続ページスクロール・ピンチ拡大。破損・ロックされたPDFはエラー表示。パスワード入力機能なし。|
+|PDF|PDFKit|連続ページスクロール・ピンチ拡大。PDFThumbnailViewによるページ一覧と選択の同期。破損・ロックPDFはエラー表示。パスワード入力なし。|
 |SVG|WKWebView|ピンチ拡大・スクロール。XML構文確認、JavaScript無効、外部リソース読み込み無効、ローカル読取範囲は選択ファイルのみ。単体のSVGが対象。外部画像・フォント・スクリプト依存の表示は非対応。|
-|PNG/JPG/JPEG|SwiftUI Image|ピンチ拡大（1〜5倍）、スクロール、ダブルタップ。破損画像はエラー表示。|
+|PNG/JPG/JPEG|SwiftUI内のUIScrollView / UIImageView|標準のピンチ拡大（全体表示〜5倍）、パン、ダブルタップ。回転・ウィンドウ変更時は全体表示基準の倍率と中心位置を可能な限り保持。単タップでツールバー切替。VoiceOverの拡大・全体表示操作。|
 
-標準システム色でライト／ダークに対応し、iPhoneの縦画面・左右の横画面を許可しています。資料自体の背景や色は変更しません。iPad・編集・検索・タグ・クラウド基盤は対象外です。
+標準システム色でライト／ダークに対応。iPhoneは縦と左右の横画面、iPadは上下の縦と左右の横画面に対応設定しています。フルスクリーン必須を無効にし、Split View / Stage Manager等のウィンドウサイズ変更を妨げません。複数の対話型アプリウィンドウは対象外です。操作ボタンはSafe Area内に保持します。資料自体の背景や色は変更しません。編集・検索・タグ・クラウド基盤は対象外です。
+
+## PDFページ一覧・プレゼンモード
+
+ページ一覧ボタンでPDFThumbnailViewを表示／非表示にします。初期表示はregular幅で左側、compact幅では非表示（表示すると下側）です。表示中のページの選択状態とタップによる移動はPDFKitが管理します。全ページの画像配列を作成・保存する処理や並べ替え操作は追加していません。大量ページのメモリ利用とスクロール性能はOSの実装に依存し、実機での計測が必要です。
+
+「プレゼン」メニューは対応範囲を「PDF・画像」と明示しています。PDFは黒背景の単一ページ表示へ切り替え、サムネイル・ナビゲーションバーを隠します。前後ボタンと左右矢印キーでページ移動できます。終了時は同じPDFビューで連続スクロールへ戻り、ページ位置と拡大率を可能な限り保持します。PDFReadingSessionが資料・ページ番号・ページ数・モードを共有し、PDFViewPageChanged通知でスクロール／サムネイル選択も反映します。
+
+画像のプレゼンは黒背景・全体表示に切り替え、ピンチ・パンは継続利用できます。終了すると通常閲覧の倍率へ戻します。画像は単一ページのため前後ページ操作はありません。終了ボタンは常に利用可能にし、閉じ込めを防ぎます。PPTX / SVGのプレゼンモードは非対応で、メニュー項目を無効にしています。Quick Look内部の操作や回転を変更する処理は追加していません。
+
+## 外部ディスプレイ
+
+iOS / iPadOS 17〜26の非対話型外部シーン `windowExternalDisplayNonInteractive` とUIWindowSceneを使用します。Info.plistに専用シーンデリゲートを登録し、SwiftUIの主画面のライフサイクルは維持します。HDMI / USB-C / AirPlayの接続と出力先の選択はOSに任せます。アプリ独自のAirPlay選択画面はありません。
+
+OSから外部シーンが提供されたとき、PDFプレゼン中だけ専用UIWindowを割り当てます。本体はページ操作、外部は同じPDFReadingSessionの現在ページを黒背景・縦横比維持で表示します。外部画面には操作UIを載せません。独立した別のページ番号は保持しません。プレゼン終了・閲覧終了・接続解除時にwindowSceneを解放します。独立出力中はOSのミラーリングを置き換え、専用ウィンドウがない場合はOS標準のミラーリング／拡張デスクトップへ任せます。接続先がなくても本体で閲覧・プレゼンを続けられます。
+
+独立出力の初期対応はPDFのみです。画像・PPTX・SVGは標準ミラーリングを利用してください。外部シーンが提供されるかどうかは端末・OS・接続先・Stage Manager等の設定に依存します。メニューの接続状態は独立表示用シーンの有無を示し、物理的なケーブルの検出を保証するものではありません。
+
+Appleの現在のドキュメントではiOS 27以降にUISceneAccessoryによる登録が必要とされています。本実装はXcode 15 / iOS 17 SDKで利用可能なAPIを基準とし、その将来APIを先行導入していません。iOS 27以降の独立表示は対象外・未検証です。その環境ではOS標準ミラーリングを利用し、SDK更新時にシーン登録方式を見直してください。
 
 閲覧中に別アプリが元ファイルを更新・移動・削除した場合、標準ビューアーの再読み込み挙動に依存します。閉じてライブラリを更新し、開き直してください。全形式のライブ更新や完全な読み取りスナップショットは提供しません。非常に大きな画像・PDFは標準デコーダーがメモリを使用します。Quick Look内部の描画失敗をアプリ側からすべて検知するAPIはありません。
 
@@ -54,8 +74,10 @@ iCloudの未ダウンロード資料は、開く際のcoordinated readでFile Pr
 
 Windowsで実行できるプロジェクトの構造チェックは `python tools/verify_project.py` です。これはXcodeビルドやSwiftの型チェックを代替しません。
 
-`PresentationViewerTests/FileAccessServiceTests.swift` はMacで実行するXCTestです。対応形式・隠しファイル・サブフォルダの除外、ブックマーク復元、追加・削除・更新の再スキャン、空ファイル、削除フォルダ、重複排除、元ファイル保持、UserDefaults復元・登録解除を検証します。テスト内の簡易ファイルはスキャン／アクセス検証用で、各フォーマットの描画検証には使いません。
+既存の `PresentationViewerTests/FileAccessServiceTests.swift` の6件は変更せず維持しています。`ViewerStateTests.swift` にページ境界、モード終了後のページ位置、空の資料、外部表示の共有状態・解除、画像回転時の倍率、PDFモード・サイズ変更を確認する6件を追加しました。計12件ともMacで実行するXCTestで、この環境では未実行です。既存テスト内の簡易ファイルはアクセス検証用で、描画検証には使いません。
 
 実機での確認項目と結果記録欄は [VALIDATION.md](VALIDATION.md) を参照してください。次回はMacでビルド・テストし、実際の資料で一連の操作を検証することを優先します。配布時のApp Icon、署名・App Store設定はまだありません。
 
 参考: [Apple: Providing access to directories](https://developer.apple.com/documentation/uikit/providing-access-to-directories)、[NSFileCoordinator](https://developer.apple.com/documentation/foundation/nsfilecoordinator)、[WKWebViewのローカルファイル読み込み](https://developer.apple.com/documentation/webkit/wkwebview/loadfileurl(_:allowingreadaccessto:))。
+
+外部表示の参考: [Apple TN3187: シーンとミラーリングの復帰](https://developer.apple.com/documentation/technotes/tn3187-migrating-to-the-uikit-scene-based-life-cycle)、[Presenting content on a connected display](https://developer.apple.com/documentation/uikit/presenting-content-on-a-connected-display)。

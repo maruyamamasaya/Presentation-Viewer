@@ -1,13 +1,22 @@
 import SwiftUI
 
+@MainActor
 struct LibraryView: View {
     @StateObject private var store = LibraryStore()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @ScaledMetric(relativeTo: .body) private var compactTileWidth = 140
+    @ScaledMetric(relativeTo: .body) private var regularTileWidth = 180
     @State private var showPicker = false
     @State private var document: OpenedDocument?
     @State private var activeAccess: OpenedDocument?
     @State private var opening = false
-    private let columns = [GridItem(.adaptive(minimum: 140), spacing: 16)]
+    @State private var visibleItemID: String?
+    private var gridSpacing: CGFloat { horizontalSizeClass == .regular ? 20 : 12 }
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: horizontalSizeClass == .regular ? regularTileWidth : compactTileWidth),
+                  spacing: gridSpacing, alignment: .top)]
+    }
 
     var body: some View {
         NavigationStack {
@@ -32,21 +41,25 @@ struct LibraryView: View {
                     if store.documents.isEmpty && !store.refreshing {
                         ContentUnavailableView("資料がありません", systemImage: "doc")
                     }
-                    LazyVGrid(columns: columns, spacing: 20) {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: gridSpacing) {
                         ForEach(store.documents) { item in
                             if let folder = store.folders.first(where: { $0.id == item.folderID }) {
                                 Button { open(item, in: folder) } label: {
                                     DocumentTile(item: item, folder: folder)
                                 }
                                 .buttonStyle(.plain)
+                                .hoverEffect(.highlight)
+                                .id(item.id)
                                 .disabled(opening)
                                 .accessibilityLabel("\(item.name)、\(item.format.rawValue.uppercased())")
                             }
                         }
                     }
-                    .padding()
+                    .scrollTargetLayout()
+                    .padding(horizontalSizeClass == .regular ? 24 : 16)
                 }
             }
+            .scrollPosition(id: $visibleItemID, anchor: .top)
             .refreshable { await store.refresh() }
             .navigationTitle("ライブラリ")
             .toolbar {
@@ -57,8 +70,10 @@ struct LibraryView: View {
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { Task { await store.refresh() } } label: { Label("更新", systemImage: "arrow.clockwise") }
+                        .keyboardShortcut("r", modifiers: .command)
                         .disabled(store.refreshing)
                     Button { showPicker = true } label: { Label("フォルダを追加", systemImage: "folder.badge.plus") }
+                        .keyboardShortcut("o", modifiers: .command)
                 }
             }
             .overlay {

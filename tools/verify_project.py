@@ -1,6 +1,7 @@
 """Check project structure on hosts without Xcode; does not compile Swift."""
 from pathlib import Path
 import re
+import plistlib
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,9 +84,22 @@ def verify():
             if "IPHONEOS_DEPLOYMENT_TARGET" in settings:
                 assert settings["IPHONEOS_DEPLOYMENT_TARGET"] == "17.0"
             if settings.get("PRODUCT_BUNDLE_IDENTIFIER") == "com.example.PresentationViewer":
-                assert settings["TARGETED_DEVICE_FAMILY"] == "1"
+                assert settings["TARGETED_DEVICE_FAMILY"] == "1,2"
+                assert settings["INFOPLIST_FILE"] == "PresentationViewer/Info.plist"
                 assert "LandscapeLeft" in settings["INFOPLIST_KEY_UISupportedInterfaceOrientations"]
                 assert "LandscapeRight" in settings["INFOPLIST_KEY_UISupportedInterfaceOrientations"]
+    info = plistlib.loads((ROOT / "PresentationViewer/Info.plist").read_bytes())
+    assert info["UIRequiresFullScreen"] is False
+    assert set(info["UISupportedInterfaceOrientations~ipad"]) == {
+        "UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown",
+        "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"}
+    manifest = info["UIApplicationSceneManifest"]
+    assert manifest["UIApplicationSupportsMultipleScenes"] is False
+    external = manifest["UISceneConfigurations"]["UIWindowSceneSessionRoleExternalDisplayNonInteractive"]
+    assert external[0]["UISceneDelegateClassName"] == "$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate"
+    for obj in objects.values():
+        if obj["isa"] == "XCBuildConfiguration" and obj["buildSettings"].get("PRODUCT_BUNDLE_IDENTIFIER") == "com.example.PresentationViewer":
+            assert obj["buildSettings"]["INFOPLIST_KEY_UIApplicationSceneManifest_Generation"] == "NO"
     scheme = ET.parse(ROOT / "PresentationViewer.xcodeproj/xcshareddata/xcschemes/PresentationViewer.xcscheme")
     for buildable in scheme.findall(".//BuildableReference"):
         assert buildable.attrib["BlueprintIdentifier"] in targets
@@ -94,7 +108,7 @@ def verify():
                    for obj in objects.values()), "Unexpected package dependency"
     print(f"PASS: OpenStep project syntax; {len(objects)} objects and references")
     print(f"PASS: {len(actual_sources)} Swift files exist and are compiled exactly once")
-    print("PASS: app and XCTest targets; shared scheme; iOS 17; iPhone orientations; no packages")
+    print("PASS: app and XCTest targets; shared scheme; iOS 17; iPhone/iPad orientations; multitasking; no packages")
     print("NOT RUN: Swift compilation, XCTest, Simulator, iCloud and device validation")
 
 
