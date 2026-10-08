@@ -58,3 +58,9 @@ SimulatorだけではiCloudの権限・File Provider、外部画面出力を十�
 ## 2026-10-08 Vesperaへのインストール
 
 本人が実名Vespera（iPhone17e）を対象と明示確認後、名前とUDID末尾0E33401Cを再照合。既存profile／identityで署名・検証済みコピーをdevicectlでこの端末だけへインストールし成功。com.example.PresentationViewerのlaunch成功、PID26275。後続の端末process一覧で存在、apps一覧で登録を確認。Photo Hubも同じ端末でインストール・起動成功。アンインストール、ストレージ初期化、追加権限の承諾、Developer Mode／信頼／認証設定変更なし。確認範囲はインストール登録とプロセス起動までで、画面・資料閲覧・フォルダ権限は未確認。my-keyboardは既存App Groups対応profile不足で保留。
+
+## 2026-10-09 画面の向き切り替えと実機更新
+
+ビューワーに横画面・縦画面の選択を追加。プレゼン中とツールバー非表示中にも操作できる。閲覧画面のUIWindowSceneにrequestGeometryUpdateで向き変更を要求し、拒否された場合は案内を表示する。
+
+Simulator Debugおよび実機向けReleaseビルド成功、プロジェクト構造チェック成功。既存の証明書・プロファイルで署名し、codesign --verify --deep --strict成功。本人指定のVespera（iPhone 17e）へdevicectlで更新インストール成功。起動要求は端末ロックにより拒否されたため、更新版の起動・画面操作・回転ロック中の切り替え動作は未確認。XCTestは今回未実施。

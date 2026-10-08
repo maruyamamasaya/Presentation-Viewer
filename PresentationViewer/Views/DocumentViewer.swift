@@ -11,6 +11,7 @@ struct DocumentViewer: View {
     @State private var toolbarVisible = true
     @State private var thumbnailPreference: Bool?
     @State private var imagePresenting = false
+    @StateObject private var orientation = ViewerOrientationController()
 
     init(document: OpenedDocument) {
         self.document = document
@@ -47,6 +48,7 @@ struct DocumentViewer: View {
                     Button("閉じる") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    orientationMenu
                     if document.format == .pdf, pdfSession.pageCount > 0 {
                         Button {
                             thumbnailPreference = !thumbnailsVisible
@@ -73,14 +75,18 @@ struct DocumentViewer: View {
             .overlay(alignment: .topLeading) {
                 if presenting {
                     // Remains reachable with touch, pointer, VoiceOver and Escape.
-                    Button("プレゼンを終了", systemImage: "xmark") { endPresentation() }
-                        .keyboardShortcut(.cancelAction)
+                    HStack {
+                        Button("プレゼンを終了", systemImage: "xmark") { endPresentation() }
+                            .keyboardShortcut(.cancelAction)
+                        orientationMenu
+                    }
                         .buttonStyle(.bordered).controlSize(.large)
                         .foregroundStyle(.white).tint(.white)
                         .padding(8).background(.black.opacity(0.65), in: Capsule()).padding(8)
                 } else if !toolbarVisible {
                     HStack {
                         Button("閉じる") { dismiss() }.keyboardShortcut(.cancelAction)
+                        orientationMenu
                         Button(action: toggleControls) {
                             Label("ツールバーを表示", systemImage: "arrow.down.right.and.arrow.up.left").labelStyle(.iconOnly)
                         }
@@ -109,7 +115,25 @@ struct DocumentViewer: View {
             }
         }
         .statusBarHidden(presenting)
+        .background(ViewerOrientationAnchor(controller: orientation).frame(width: 0, height: 0))
+        .alert("画面の向きを変更できません", isPresented: Binding(
+            get: { orientation.errorMessage != nil },
+            set: { if !$0 { orientation.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { orientation.errorMessage = nil }
+        } message: {
+            Text(orientation.errorMessage ?? "")
+        }
         .onDisappear { external.end(pdfSession) }
+    }
+
+    private var orientationMenu: some View {
+        Menu {
+            Button("横画面にする", systemImage: "rectangle") { orientation.request(.landscape) }
+            Button("縦画面にする", systemImage: "rectangle.portrait") { orientation.request(.portrait) }
+        } label: {
+            Label("画面の向き", systemImage: "rotate.right")
+        }
     }
 
     private func toggleControls() {
@@ -132,6 +156,39 @@ struct DocumentViewer: View {
         imagePresenting = false
         toolbarVisible = true
     }
+}
+
+/// Resolve the scene from the viewer itself so external displays are never rotated.
+@MainActor
+private final class ViewerOrientationController: ObservableObject {
+    weak var viewController: UIViewController?
+    @Published var errorMessage: String?
+
+    func request(_ orientations: UIInterfaceOrientationMask) {
+        guard let viewController, let scene = viewController.view.window?.windowScene else {
+            errorMessage = "画面の準備ができていません。もう一度お試しください。"
+            return
+        }
+        errorMessage = nil
+        viewController.setNeedsUpdateOfSupportedInterfaceOrientations()
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { [weak self] _ in
+            Task { @MainActor in
+                self?.errorMessage = "この表示状態では画面の向きを変更できません。iPadでは全画面で開いてからお試しください。"
+            }
+        }
+    }
+}
+
+private struct ViewerOrientationAnchor: UIViewControllerRepresentable {
+    let controller: ViewerOrientationController
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let viewController = UIViewController()
+        controller.viewController = viewController
+        return viewController
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 }
 
 struct ViewerErrorView: View {
