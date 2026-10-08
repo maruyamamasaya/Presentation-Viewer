@@ -68,9 +68,13 @@ Appleの現在のドキュメントではiOS 27以降にUISceneAccessoryによ�
 
 閲覧中に別アプリが元ファイルを更新・移動・削除した場合、標準ビューアーの再読み込み挙動に依存します。閉じてライブラリを更新し、開き直してください。全形式のライブ更新や完全な読み取りスナップショットは提供しません。非常に大きな画像・PDFは標準デコーダーがメモリを使用します。Quick Look内部の描画失敗をアプリ側からすべて検知するAPIはありません。
 
+## アプリアイコン
+
+独自のスライド／グラフ図案を `PresentationViewer/Assets.xcassets/AppIcon.appiconset` に配置。1024pxの不透明RGB原稿からiOSの各サイズをAsset Catalogで生成します。再生成は `swift tools/render-app-icon.swift PresentationViewer/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`。2026-10-08 JSTに署名なしSimulator Debug／実機向けReleaseビルドを確認しました。検証の範囲は [VALIDATION.md](VALIDATION.md)。
+
 ## 検証状況
 
-開発環境はWindowsです。Xcode、Apple SDK、Swiftコンパイラー、iOS Simulator、実機がなく、iOSビルド・XCTest・アプリ実行は未実施です。起動や各形式の表示、ブックマークの再起動後の有効性、iCloud取得、縦横画面、ダークモードが成功したとは報告していません。
+初期開発環境はWindowsでした。2026-10-08 JSTのアイコン追加でMacの署名なしiOSビルドは成功しました。XCTest・アプリ実行は未実施です。起動や各形式の表示、ブックマークの再起動後の有効性、iCloud取得、縦横画面、ダークモードが成功したとは報告していません。
 
 Windowsで実行できるプロジェクトの構造チェックは `python tools/verify_project.py` です。これはXcodeビルドやSwiftの型チェックを代替しません。
 

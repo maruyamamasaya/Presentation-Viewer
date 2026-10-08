@@ -1,5 +1,7 @@
 # 検証記録
 
+2026-10-08 JST（アイコン追加）: 不透明RGB 1024pxの独自スライド図案をAppIconへ組み込み。Mac/Xcodeで署名なしDebug（generic iOS Simulator）とRelease（generic iOS）buildが成功。生成Info.plistのCFBundleIconName=AppIconを確認。原稿と60pxを目視確認。構造検査・git diff --check成功。アプリ操作・XCTest・実機ホーム画面は未確認。再描画原稿: `tools/render-app-icon.swift`。署名・セキュリティ設定の変更なし。
+
 2026-10-08: Phase 2・3をWindows上で実装。iOS実行結果はすべて未検証。以下はMac / iPhone / iPadで実施する確認手順です。Windowsでの構造チェックとGit差分チェックのみ実施します。
 
 Windows確認結果: `python tools/verify_project.py` 成功。57個のプロジェクトオブジェクト参照、16個のSwiftファイルのコンパイル対象登録、共有Scheme、ユニバーサル設定、iPad全4方向、マルチタスク・外部シーン設定、外部パッケージなしを検査しました。`git diff --check` 成功。1934195からFileAccessService、LibraryStore、既存6件のXCTestに変更がないことを差分で確認しました。これはSwiftコンパイルや実行テストの成功を意味しません。
