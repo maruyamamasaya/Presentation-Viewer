@@ -72,7 +72,7 @@ struct DocumentViewer: View {
                 }
             }
             .toolbar(toolbarVisible && !presenting ? .visible : .hidden, for: .navigationBar)
-            .overlay(alignment: .topLeading) {
+            .safeAreaInset(edge: .top, spacing: 0) {
                 if presenting {
                     // Remains reachable with touch, pointer, VoiceOver and Escape.
                     HStack {
@@ -96,7 +96,7 @@ struct DocumentViewer: View {
                     .padding(8).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).padding(8)
                 }
             }
-            .overlay(alignment: .bottom) {
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 if document.format == .pdf, presenting {
                     HStack(spacing: 24) {
                         Button { pdfSession.movePage(-1) } label: { Label("前のページ", systemImage: "chevron.left") }

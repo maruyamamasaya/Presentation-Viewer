@@ -94,7 +94,8 @@ final class ZoomingImageView: UIScrollView, UIScrollViewDelegate {
         resizing = true
         defer { resizing = false }
         let initial = viewport == .zero
-        let relativeZoom = initial ? 1 : zoomScale / fitScale
+        // A new viewport (rotation or window resize) starts with the whole image visible.
+        let relativeZoom: CGFloat = 1
         let focus = imageView.convert(CGPoint(x: contentOffset.x + viewport.width / 2,
                                              y: contentOffset.y + viewport.height / 2), from: self)
         viewport = bounds.size

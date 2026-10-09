@@ -59,7 +59,7 @@ final class PDFCanvasController: UIViewController {
             child.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(child)
         }
-        pdfView.autoScales = true
+        pdfView.autoScales = false
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
         pdfView.document = session.document
@@ -83,7 +83,7 @@ final class PDFCanvasController: UIViewController {
         defer { synchronizing = false }
         if presentation != session.isPresenting {
             if session.isPresenting {
-                readingScale = pdfView.scaleFactor / max(pdfView.scaleFactorForSizeToFit, 0.001)
+                readingScale = pdfView.scaleFactor / max(pdfView.pageFitScale, 0.001)
             }
             presentation = session.isPresenting
             pdfView.displayMode = presentation ? .singlePage : .singlePageContinuous
@@ -128,7 +128,7 @@ final class PDFCanvasController: UIViewController {
         showPage(session.pageIndex)
         // Restore reader zoom once after returning from single-page presentation.
         if !presentation, readingScale != 1 {
-            pdfView.scaleFactor = min(max(pdfView.scaleFactorForSizeToFit * readingScale,
+            pdfView.scaleFactor = min(max(pdfView.pageFitScale * readingScale,
                                          pdfView.minScaleFactor), pdfView.maxScaleFactor)
             readingScale = 1
         }
@@ -150,9 +150,28 @@ final class PDFCanvasController: UIViewController {
 
 final class ResizingPDFView: PDFView {
     private var viewport = CGSize.zero
-    private var previousFit: CGFloat = 0
     private var resizing = false
     var resetFitOnNextLayout = false
+
+    // Continuous PDFKit autoscaling fits width. Use both dimensions instead,
+    // including page-break margins and rotated pages. Fit every page in mixed PDFs.
+    var pageFitScale: CGFloat {
+        guard let document, bounds.width > 0, bounds.height > 0 else { return 0 }
+        let margins = displaysPageBreaks ? pageBreakMargins : .zero
+        let width = max(1, bounds.width - margins.left - margins.right - 8)
+        let height = max(1, bounds.height - margins.top - margins.bottom - 8)
+        var fit = CGFloat.greatestFiniteMagnitude
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            var size = page.bounds(for: displayBox).size
+            if abs(page.rotation % 180) == 90 {
+                size = CGSize(width: size.height, height: size.width)
+            }
+            guard size.width > 0, size.height > 0 else { continue }
+            fit = min(fit, width / size.width, height / size.height)
+        }
+        return fit == .greatestFiniteMagnitude ? 0 : fit
+    }
 
     override func layoutSubviews() {
         guard !resizing, bounds.width > 0, bounds.height > 0,
@@ -162,19 +181,17 @@ final class ResizingPDFView: PDFView {
         }
         resizing = true
         defer { resizing = false }
-        let destination = currentDestination
-        let relativeZoom = viewport == .zero || previousFit <= 0 || resetFitOnNextLayout
-            ? 1 : max(1, scaleFactor / previousFit)
+        let page = currentPage
         resetFitOnNextLayout = false
         viewport = bounds.size
         super.layoutSubviews()
-        let fit = scaleFactorForSizeToFit
+        let fit = pageFitScale
         if fit > 0 {
-            previousFit = fit
             minScaleFactor = fit
             maxScaleFactor = fit * 5
-            scaleFactor = min(fit * relativeZoom, maxScaleFactor)
+            scaleFactor = fit
         }
-        if let destination { go(to: destination) }
+        // Restore the page, rather than an old scroll destination that can crop it.
+        if let page { go(to: page) }
     }
 }

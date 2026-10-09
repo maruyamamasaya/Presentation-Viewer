@@ -74,7 +74,7 @@ final class ViewerStateTests: XCTestCase {
     }
 
     @MainActor
-    func testImageResizeKeepsAspectFitAndRelativeZoom() {
+    func testImageResizeReturnsToAspectFit() {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 900)).image { context in
             UIColor.white.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 1600, height: 900))
@@ -87,11 +87,29 @@ final class ViewerStateTests: XCTestCase {
         view.frame = CGRect(x: 0, y: 0, width: 800, height: 400)
         view.layoutIfNeeded()
         XCTAssertEqual(view.minimumZoomScale, 400 / 900, accuracy: 0.001)
-        XCTAssertEqual(view.zoomScale / view.minimumZoomScale, 2, accuracy: 0.01)
+        XCTAssertEqual(view.zoomScale / view.minimumZoomScale, 1, accuracy: 0.01)
         view.frame = CGRect(x: 0, y: 0, width: 300, height: 600)
         view.layoutIfNeeded()
-        XCTAssertEqual(view.zoomScale / view.minimumZoomScale, 2, accuracy: 0.01)
+        XCTAssertEqual(view.zoomScale / view.minimumZoomScale, 1, accuracy: 0.01)
         XCTAssertTrue(view.contentOffset.x.isFinite && view.contentOffset.y.isFinite)
+    }
+
+    @MainActor
+    func testContinuousPDFFitsEntirePageAfterLandscapeResize() throws {
+        let view = ResizingPDFView()
+        view.autoScales = false
+        view.displayMode = .singlePageContinuous
+        view.document = try makePDF()
+        view.frame = CGRect(x: 0, y: 0, width: 400, height: 750)
+        view.layoutIfNeeded()
+        view.go(to: try XCTUnwrap(view.document?.page(at: 1)))
+        view.scaleFactor = view.minScaleFactor * 2
+        view.frame = CGRect(x: 0, y: 0, width: 800, height: 260)
+        view.layoutIfNeeded()
+        XCTAssertLessThanOrEqual(960 * view.scaleFactor, 800)
+        XCTAssertLessThanOrEqual(540 * view.scaleFactor, 260)
+        XCTAssertEqual(view.scaleFactor, view.minScaleFactor, accuracy: 0.001)
+        XCTAssertTrue(view.currentPage === view.document?.page(at: 1))
     }
 
     @MainActor
