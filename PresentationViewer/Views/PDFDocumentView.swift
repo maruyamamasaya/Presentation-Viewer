@@ -94,13 +94,19 @@ final class PDFCanvasController: UIViewController {
             pdfView.setNeedsLayout()
             view.layoutIfNeeded()
         }
-        let key = "\(thumbnailsVisible):\(verticalThumbnails)"
+        let key = "\(thumbnailsVisible):\(verticalThumbnails):\(presentation)"
         if layoutKey != key {
             layoutKey = key
             NSLayoutConstraint.deactivate(layoutConstraints)
             thumbnailView.isHidden = !thumbnailsVisible
             thumbnailView.layoutMode = verticalThumbnails ? .vertical : .horizontal
             thumbnailView.backgroundColor = .secondarySystemBackground
+            if presentation {
+                layoutConstraints = [pdfView.topAnchor.constraint(equalTo: view.topAnchor),
+                    pdfView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    pdfView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    pdfView.trailingAnchor.constraint(equalTo: view.trailingAnchor)]
+            } else {
             let safe = view.safeAreaLayoutGuide
             layoutConstraints = [pdfView.topAnchor.constraint(equalTo: safe.topAnchor),
                                  pdfView.trailingAnchor.constraint(equalTo: safe.trailingAnchor)]
@@ -121,6 +127,7 @@ final class PDFCanvasController: UIViewController {
                     thumbnailView.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
                     thumbnailView.bottomAnchor.constraint(equalTo: safe.bottomAnchor),
                     thumbnailView.heightAnchor.constraint(equalToConstant: 100)]
+            }
             }
             NSLayoutConstraint.activate(layoutConstraints)
             view.layoutIfNeeded()

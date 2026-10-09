@@ -5,6 +5,18 @@ import UIKit
 
 final class ViewerStateTests: XCTestCase {
     @MainActor
+    func testOrientationPolicyDefaultsToPortraitAndSupportsPresentation() {
+        let delegate = AppOrientationPolicy()
+        defer { AppOrientationPolicy.mask = .portrait }
+        AppOrientationPolicy.mask = .portrait
+        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .portrait)
+        AppOrientationPolicy.mask = .landscape
+        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .landscape)
+        AppOrientationPolicy.mask = .portrait
+        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .portrait)
+    }
+
+    @MainActor
     private func makePDF() throws -> PDFDocument {
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 960, height: 540))
         let data = renderer.pdfData { context in
@@ -110,6 +122,19 @@ final class ViewerStateTests: XCTestCase {
         XCTAssertLessThanOrEqual(540 * view.scaleFactor, 260)
         XCTAssertEqual(view.scaleFactor, view.minScaleFactor, accuracy: 0.001)
         XCTAssertTrue(view.currentPage === view.document?.page(at: 1))
+    }
+
+    @MainActor
+    func testPresentationUsesEntireCanvasWithSafeAreaInsets() throws {
+        let session = PDFReadingSession(document: try makePDF())
+        let controller = PDFCanvasController(session: session)
+        controller.loadViewIfNeeded()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 960, height: 540)
+        controller.additionalSafeAreaInsets = UIEdgeInsets(top: 20, left: 30, bottom: 15, right: 30)
+        session.isPresenting = true
+        controller.configure(thumbnailsVisible: false, verticalThumbnails: false)
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(controller.pdfView.frame, controller.view.bounds)
     }
 
     @MainActor

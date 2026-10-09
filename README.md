@@ -1,6 +1,6 @@
 # Presentation Viewer
 
-iPhone・iPad用の資料閲覧専用SwiftUIユニバーサルアプリ。iOS / iPadOS 17以降。外部ライブラリ、サーバー、認証、データベースなし。
+iPhone・iPad用の資料閲覧専用SwiftUIユニバーサルアプリ。iOS / iPadOS 17以降。外部ライブラリなし。既存フォルダ閲覧に加え、図解ライブラリのモック連携に対応。本番クラウド認証・接続は未設定。
 
 ## 開く・実行する
 
@@ -79,10 +79,28 @@ Appleの現在のドキュメントではiOS 27以降にUISceneAccessoryによ�
 
 Windowsで実行できるプロジェクトの構造チェックは `python tools/verify_project.py` です。これはXcodeビルドやSwiftの型チェックを代替しません。
 
-既存の `PresentationViewerTests/FileAccessServiceTests.swift` の6件は変更せず維持しています。`ViewerStateTests.swift` にページ境界、モード終了後のページ位置、空の資料、外部表示の共有状態・解除、画像回転時の全体表示、PDFモード・サイズ変更を確認する6件を追加しました。計13件ともMacで実行するXCTestで、この環境では未実行です。横向きでのPDF全体表示の回帰テスト1件を追加しています。既存テスト内の簡易ファイルはアクセス検証用で、描画検証には使いません。
+既存の `PresentationViewerTests/FileAccessServiceTests.swift` の6件は変更せず維持しています。`ViewerStateTests.swift` にページ境界、モード終了後のページ位置、空の資料、外部表示の共有状態・解除、画像回転時の全体表示、PDFモード・サイズ変更を確認する6件を追加しました。これら13件は当時未実行でした。2026-10-09には新規クラウド6件と合わせてMacで19件が合格しています。横向きでのPDF全体表示の回帰テスト1件を追加しています。既存テスト内の簡易ファイルはアクセス検証用で、描画検証には使いません。
 
 実機での確認項目と結果記録欄は [VALIDATION.md](VALIDATION.md) を参照してください。次回はMacでビルド・テストし、実際の資料で一連の操作を検証することを優先します。配布時のApp Icon、署名・App Store設定はまだありません。
 
 参考: [Apple: Providing access to directories](https://developer.apple.com/documentation/uikit/providing-access-to-directories)、[NSFileCoordinator](https://developer.apple.com/documentation/foundation/nsfilecoordinator)、[WKWebViewのローカルファイル読み込み](https://developer.apple.com/documentation/webkit/wkwebview/loadfileurl(_:allowingreadaccessto:))。
 
 外部表示の参考: [Apple TN3187: シーンとミラーリングの復帰](https://developer.apple.com/documentation/technotes/tn3187-migrating-to-the-uikit-scene-based-life-cycle)、[Presenting content on a connected display](https://developer.apple.com/documentation/uikit/presenting-content-on-a-connected-display)。
+
+## Phase 11B-1：図解ライブラリ
+
+「ローカル資料」と「図解ライブラリ」をタブで切り替える。既存のフォルダ登録・iCloud Drive閲覧は維持する。図解ライブラリではモック2資料の一覧・タイトル／タグ検索・詳細・PNGページ選択・SVG/PNG/PDF/PPTX取得を利用できる。「開く」は一時キャッシュ、「アプリ内に保存」は永続保存。保存済み資料は通信なしで開け、キャッシュ削除後も残る。取得・保存・オフライン読取時にSHA256とサイズを照合する。
+
+検索窓は一覧上部に常時表示。「すべて／タイトル／タグ」で検索対象を切り替え、入力中に一覧を絞り込む。検索は取得済み一覧が対象（現在は同梱モック全件）。「保存済み」で永続資料を選ぶ。PPTXはQuick Lookで日本語の折り返しが変わる場合があり、見た目を保つ閲覧はPDFを推奨する。公開OIDC・Keychain・実API接続・実機への更新インストールは次工程。AWS認証情報をアプリへ追加していない。
+
+[設計・保存仕様](docs/cloud-library.md)／[今回の検証](docs/phase11b1-validation.md)。モックは同梱fixtureのprotocol実装で、外部HTTPモックサーバーではない。
+
+2026-10-10操作改善：図解ライブラリはサムネイルカードから1タップでPDFを開く方式へ変更。閲覧中の保存ボタンで現在の資料を保存し、そのまま読み続けられる。形式・版情報は補助メニューへ集約。保存済みも同じカードで表示。[変更・検証](docs/ux-refresh-validation.md)。
+
+2026-10-10追加：図解ライブラリを起動時トップ、ローカル資料を第2タブへ変更。SVG表示は廃止。現在形式のPDF/PNG/PPTXから直接形式選択。プレゼン中は全画面資料＋右側の小さな前後・終了操作のみ。[変更・検証](docs/presentation-focus-validation.md)。
+
+## Phase 11B-2（ローカル実装・公開承認待ち）
+
+モックを既定として維持し、本番設定切替、Cognito Code+PKCE、Keychain、refresh/logout、利用者別保存、期限切れURL再発行を追加。接続設定はライブラリ右上のその他メニュー。本番URLは未設定で実S3には未接続。[設定と検証](docs/phase11b2-validation.md)、[現在地](CURRENT.md)。承認後の公開値だけをconfig/cloud-connection.example.jsonに沿って別JSONへ記入し、`python3 tools/configure-cloud.py <approved-settings.json>`でInfoへ反映して再ビルドする。AWSキー／client secretは設定しない。
+
+公開APIは承認後デプロイ済み、公開設定を反映済み。[接続の現在地](docs/phase11b2-deployment.md)。本人のCognito登録／owner設定前は資料アクセス拒否。

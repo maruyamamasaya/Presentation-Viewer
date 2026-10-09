@@ -1,0 +1,112 @@
+[
+  {
+    "id": "b290c3e5-9e2f-4abc-9193-d937859e9af6",
+    "title": "RAGシステムの技術解説（モック）",
+    "type": "presentation",
+    "version": 1,
+    "formats": [
+      "png",
+      "pdf",
+      "pptx"
+    ],
+    "pageCount": 8,
+    "tags": [
+      "RAG",
+      "技術資料"
+    ],
+    "files": [
+      {
+        "name": "slides/001/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 181652,
+        "sha256": "210c94fd586f65ca42f7e18d030290dcbacb3d6659a01067f7246ee621de54d5"
+      },
+      {
+        "name": "slides/002/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 209811,
+        "sha256": "3da5788995d4b1ffdf28d5266261f1a9b0e2b1a6f851685228ab3829a9299f5a"
+      },
+      {
+        "name": "slides/003/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 167025,
+        "sha256": "f82b1b934351103aaacf17f615b217bd76a4461a20ef7b125bdcf6cdc5302222"
+      },
+      {
+        "name": "slides/004/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 178688,
+        "sha256": "db6a486800b51ecb9417b8d793c1448d7270f2fb7d66f2a2ec6bc5b9819d5115"
+      },
+      {
+        "name": "slides/005/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 187817,
+        "sha256": "9505a295989f6ab4682207e7fa00dc6baee0a87e6f8558d861edff62a617e604"
+      },
+      {
+        "name": "slides/006/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 183268,
+        "sha256": "7de4090a7093bd25893e9233a798703c75b06b1bc0942f6a1490260de7ca8e98"
+      },
+      {
+        "name": "slides/007/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 209291,
+        "sha256": "3eaa00d8622337ec529f9ddc0e5fbb20d04cf1ee148ed696527adbbd6b617acf"
+      },
+      {
+        "name": "slides/008/slide.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 170692,
+        "sha256": "43d9851f40da2f57625bf246c70bac1eb3d2e2083c881d3e21c0075ba53eade9"
+      },
+      {
+        "name": "document.pdf",
+        "format": "pdf",
+        "role": "document",
+        "sizeBytes": 902888,
+        "sha256": "65caa5ff1360648ce8c6748d8062ac3261f92bf111fee37e1787db9b421a6c9b"
+      },
+      {
+        "name": "presentation.pptx",
+        "format": "pptx",
+        "role": "document",
+        "sizeBytes": 42186,
+        "sha256": "ad7139acf2083515ee72cd310c00e2a055e7282071546765723a62b0b43d588c"
+      }
+    ]
+  },
+  {
+    "id": "37386704-778e-41a5-a0f6-71e6e64cdf24",
+    "title": "SVG構成図（モック）",
+    "type": "architecture",
+    "version": 1,
+    "formats": [
+      "svg"
+    ],
+    "pageCount": 1,
+    "tags": [
+      "SVG"
+    ],
+    "files": [
+      {
+        "name": "diagram.svg",
+        "format": "svg",
+        "role": "source",
+        "sizeBytes": 431,
+        "sha256": "6badab6fab4ee3f48d68a5ea0c2daa19668b8384fd4c78e84118078ba16e1559"
+      }
+    ]
+  }
+]

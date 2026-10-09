@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var activeAccess: OpenedDocument?
     @State private var opening = false
     @State private var visibleItemID: String?
+    private var visibleDocuments: [LibraryDocument] { store.documents.filter { $0.format != .svg } }
     private var gridSpacing: CGFloat { horizontalSizeClass == .regular ? 20 : 12 }
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: horizontalSizeClass == .regular ? regularTileWidth : compactTileWidth),
@@ -38,11 +39,11 @@ struct LibraryView: View {
                         }
                         .padding(.horizontal)
                     }
-                    if store.documents.isEmpty && !store.refreshing {
+                    if visibleDocuments.isEmpty && !store.refreshing {
                         ContentUnavailableView("資料がありません", systemImage: "doc")
                     }
                     LazyVGrid(columns: columns, alignment: .leading, spacing: gridSpacing) {
-                        ForEach(store.documents) { item in
+                        ForEach(visibleDocuments) { item in
                             if let folder = store.folders.first(where: { $0.id == item.folderID }) {
                                 Button { open(item, in: folder) } label: {
                                     DocumentTile(item: item, folder: folder)
@@ -93,7 +94,9 @@ struct LibraryView: View {
         .fullScreenCover(item: $document, onDismiss: {
             activeAccess?.endAccess()
             activeAccess = nil
-        }) { DocumentViewer(document: $0) }
+        }) { opened in
+            LocalDocumentReader(initial: opened, items: store.documents, folders: store.folders)
+        }
         .alert("読み込めません", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -121,6 +124,50 @@ struct LibraryView: View {
                 await store.refresh()
             }
             opening = false
+        }
+    }
+}
+
+@MainActor
+private struct LocalDocumentReader: View {
+    let initial: OpenedDocument
+    let items: [LibraryDocument]
+    let folders: [RegisteredFolder]
+    @State private var current: OpenedDocument?
+    @State private var acquired: OpenedDocument?
+    @State private var busy = false
+    @State private var error: String?
+    private var document: OpenedDocument { current ?? initial }
+    private var pages: [LibraryDocument] {
+        items.filter { $0.format == .png && $0.url.deletingLastPathComponent() == initial.url.deletingLastPathComponent() }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+    private var controls: ImagePageControls? {
+        guard initial.format == .png, pages.count > 1,
+              let index = pages.firstIndex(where: { $0.url.lastPathComponent == document.url.lastPathComponent }) else { return nil }
+        return ImagePageControls(canPrevious: !busy && index > 0, canNext: !busy && index + 1 < pages.count,
+            previous: { if index > 0 { move(to: pages[index - 1]) } },
+            next: { if index + 1 < pages.count { move(to: pages[index + 1]) } })
+    }
+    var body: some View {
+        DocumentViewer(document: document, imagePages: controls)
+            .overlay { if busy { ProgressView("読み込み中…").padding().background(.regularMaterial) } }
+            .alert("読み込めません", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") { error = nil }
+            } message: { Text(error ?? "") }
+            .onDisappear { acquired?.endAccess(); acquired = nil }
+    }
+    private func move(to item: LibraryDocument) {
+        guard !busy, let folder = folders.first(where: { $0.id == item.folderID }) else { return }
+        busy = true
+        Task {
+            do {
+                let opened = try await Task.detached { try FileAccessService.open(item, in: folder) }.value
+                let old = acquired
+                current = opened; acquired = opened
+                old?.endAccess()
+            } catch { self.error = error.localizedDescription }
+            busy = false
         }
     }
 }

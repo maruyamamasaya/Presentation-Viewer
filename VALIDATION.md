@@ -1,5 +1,11 @@
 # 検証記録
 
+最新：[Phase 11B-2](docs/phase11b2-validation.md)。署名付きSimulator27テスト合格。公開OIDC/iOS実S3は未検証。
+
+2026-10-10再検証：[Phase 11B Mac再検証](docs/phase11b-refresh-validation.md)。XCTest23件合格、Simulator一覧目視、接続iPhone更新・起動成功。手動操作と実機画面は未検証。
+
+最新：2026-10-09 [Phase 11B-1](docs/phase11b1-validation.md)。MacでSimulator build・XCTest19件合格。以下の2026-10-08の未実施表は当時の記録として維持する。実機／iCloud等の未検証は最新記録を参照。
+
 2026-10-08 JST（アイコン追加）: 不透明RGB 1024pxの独自スライド図案をAppIconへ組み込み。Mac/Xcodeで署名なしDebug（generic iOS Simulator）とRelease（generic iOS）buildが成功。生成Info.plistのCFBundleIconName=AppIconを確認。原稿と60pxを目視確認。構造検査・git diff --check成功。アプリ操作・XCTest・実機ホーム画面は未確認。再描画原稿: `tools/render-app-icon.swift`。署名・セキュリティ設定の変更なし。
 
 2026-10-08: Phase 2・3をWindows上で実装。iOS実行結果はすべて未検証。以下はMac / iPhone / iPadで実施する確認手順です。Windowsでの構造チェックとGit差分チェックのみ実施します。
@@ -77,3 +83,9 @@ PDFは幅・高さ・ページ余白と回転情報から全ページが収ま�
 |拡大後の回転|ピンチで拡大後に回転。同じページを全体表示し、その後再び拡大できる|未実施|
 
 PPTXは引き続きQuick Look、SVGはWebKitの標準表示で、この変更での全体表示調整はPDF・画像が対象です。
+
+2026-10-09（追記）：ユーザー指定Apple IDで既存iPhoneへ署名Debugビルド・同Bundle ID更新インストール・起動が成功。画面／実機オフラインの確認とは区別する。証跡は[Phase 11B-1](docs/phase11b1-validation.md)の追記。
+
+2026-10-10：図解ライブラリの導線を刷新。Simulator build・XCTest21件、実機署名build、既存iPhone更新インストール／起動が成功。サムネイル一覧→1タップPDF表示をSimulator目視。実機操作感は未確認。[記録](docs/ux-refresh-validation.md)。
+
+2026-10-10追加：図解トップ・SVG表示廃止・全画面プレゼン・直接形式選択。22 XCTest合格、実機build／更新／起動成功。起動画面目視済み、新サイド操作と形式選択の手動確認は未実施。[記録](docs/presentation-focus-validation.md)。

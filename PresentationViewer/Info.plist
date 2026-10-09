@@ -2,31 +2,44 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>UIApplicationSceneManifest</key>
-    <dict>
-        <key>UIApplicationSupportsMultipleScenes</key>
-        <false/>
-        <key>UISceneConfigurations</key>
-        <dict>
-            <key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
-            <array>
-                <dict>
-                    <key>UISceneConfigurationName</key>
-                    <string>External Presentation</string>
-                    <key>UISceneDelegateClassName</key>
-                    <string>$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate</string>
-                </dict>
-            </array>
-        </dict>
-    </dict>
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    <key>UIRequiresFullScreen</key>
-    <false/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>External Presentation</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIRequiresFullScreen</key>
+	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.example.PresentationViewer.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>presentationviewer</string>
+			</array>
+		</dict>
+	</array>
+	<key>CloudConnectionJSON</key>
+	<string>{"issuer":"https://cognito-idp.ap-northeast-1.amazonaws.com/ap-northeast-1_qKFdR57RY","domain":"https://diagram-library-676643701781.auth.ap-northeast-1.amazoncognito.com","clientID":"56ai6vn12eq9j6bof1hpvrv5g9","api":"https://2zpp6z8zvc.execute-api.ap-northeast-1.amazonaws.com","artifactHosts":["diagram-design-system-676643701781-apne1.s3.ap-northeast-1.amazonaws.com","s3.ap-northeast-1.amazonaws.com"],"redirect":"presentationviewer://oauth/callback"}</string>
 </dict>
 </plist>
