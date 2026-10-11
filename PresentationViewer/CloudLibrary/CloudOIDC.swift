@@ -84,12 +84,18 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
     private var refreshTask: Task<String, Error>?
     private let session: URLSession
     private var keychain: CloudKeychain { CloudKeychain(account: config.key) }
-    init(config: CloudConnection, transport: URLSession? = nil) throws {
+    init(config: CloudConnection, transport: URLSession? = nil, readTokens: (() throws -> CloudTokens?)? = nil) throws {
         try config.validate(); self.config = config
         let settings = URLSessionConfiguration.ephemeral; settings.httpShouldSetCookies = false; settings.urlCache = nil; settings.timeoutIntervalForRequest = 30
         session = transport ?? URLSession(configuration: settings, delegate: NoRedirects(), delegateQueue: nil)
         super.init()
-        tokens = try keychain.read(); subject = tokens?.subject
+        do { if let readTokens { tokens = try readTokens() } else { tokens = try keychain.read() }; subject = tokens?.subject }
+        catch { message = "保存済みのログイン情報を読み込めませんでした。端末のロックを解除して再試行するか、ログインしてください。" }
+    }
+    func restoreSession() {
+        guard tokens == nil, !working else { return }
+        do { tokens = try keychain.read(); subject = tokens?.subject; message = nil }
+        catch { message = "保存済みのログイン情報を読み込めませんでした。端末のロックを解除して再試行してください。" }
     }
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first(where: \.isKeyWindow) ?? ASPresentationAnchor()

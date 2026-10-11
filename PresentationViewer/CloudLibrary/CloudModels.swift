@@ -28,6 +28,16 @@ enum CloudFormat: String, Codable, CaseIterable, Sendable {
     }
 }
 
+enum CloudLibraryKind: String, CaseIterable {
+    case presentations, illustrations
+    var title: String { self == .presentations ? "プレゼン資料" : "図解ライブラリ" }
+    func contains(_ diagram: CloudDiagram) -> Bool {
+        // Untyped historic entries remain in presentations; legacy single diagrams stay illustrations.
+        let single = ["illustration", "roadmap", "architecture", "flowchart", "comparison"].contains(diagram.type)
+        return self == .illustrations ? single : !single
+    }
+}
+
 struct CloudDiagram: Codable, Identifiable, Sendable, Equatable {
     let id: String
     let title: String
@@ -120,4 +130,34 @@ func cloudDate(_ value: String) -> Date? {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+}
+
+/// A device-local reading collection. Membership is by document ID; the snapshot is an offline fallback.
+struct CloudCollection: Codable, Identifiable, Sendable, Equatable {
+    let id: UUID
+    var title: String
+    var members: [CloudDiagram]
+    func validate() throws {
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 120,
+              !members.isEmpty, members.count <= 100,
+              Set(members.map { $0.id.lowercased() }).count == members.count,
+              members.allSatisfy({ CloudLibraryKind.illustrations.contains($0) && ($0.formats.contains(.png) || $0.formats.contains(.pdf)) }) else { throw CloudError.invalidResponse }
+        for member in members { try member.validate() }
+    }
+    func resolved(using available: [CloudDiagram], hidden: [CloudDiagram]) -> [CloudDiagram] {
+        let hiddenIDs = Set(hidden.map { $0.id.lowercased() })
+        return members.filter { !hiddenIDs.contains($0.id.lowercased()) }.map { member in
+            available.filter { $0.id.lowercased() == member.id.lowercased() && CloudLibraryKind.illustrations.contains($0) }
+                .max(by: { $0.version < $1.version }) ?? member
+        }
+    }
+}
+struct CloudCollectionPage: Identifiable, Sendable {
+    let diagram: CloudDiagram
+    let file: CloudFile
+    var id: String { SavedCloudFile(diagram: diagram, file: file).id }
+}
+func collectionReadingFiles(_ files: [CloudFile]) -> [CloudFile] {
+    let pngs = files.filter { $0.format == .png }.sorted { $0.page < $1.page }
+    return pngs.isEmpty ? files.filter { $0.format == .pdf }.prefix(1).map { $0 } : pngs
 }

@@ -89,3 +89,21 @@ PPTXは引き続きQuick Look、SVGはWebKitの標準表示で、この変更で
 2026-10-10：図解ライブラリの導線を刷新。Simulator build・XCTest21件、実機署名build、既存iPhone更新インストール／起動が成功。サムネイル一覧→1タップPDF表示をSimulator目視。実機操作感は未確認。[記録](docs/ux-refresh-validation.md)。
 
 2026-10-10追加：図解トップ・SVG表示廃止・全画面プレゼン・直接形式選択。22 XCTest合格、実機build／更新／起動成功。起動画面目視済み、新サイド操作と形式選択の手動確認は未実施。[記録](docs/presentation-focus-validation.md)。
+
+2026-10-10：登録資料容量画面。Simulator通常署名で29 XCTest合格、サンプル集計2件・2.4 MBのsheetを目視確認。実機更新・本番容量集計は未実施。[記録](docs/capacity-validation.md)。
+
+独立一枚図の31 XCTest・Simulator初期画面・実機更新/起動の範囲は[記録](docs/illustration-validation.md)。本番新図解取得はAPI更新承認待ち。
+
+2026-10-10 端末キャッシュ優先：同版再利用・新版取得・破損再取得・保存維持・オフライン再表示を追加検証。[証跡](docs/cache-validation.md)。実機の速度測定は未実施。
+
+2026-10-10：クラウド資料のゴミ箱。Simulator38 XCTest合格、既存Teamで署名build/codesign確認、既存Vespera更新インストール・更新版起動成功。本番API反映済み。認証済み移動/復元の実機操作は未確認。[記録](docs/library-trash.md)。
+
+2026-10-10：クラウドゴミ箱UIを端末非表示へ変更。39 XCTest合格、署名build/codesign、Vespera更新/起動成功。本人実機の非表示/再表示は未確認。[仕様・検証](docs/local-hidden-documents.md)。
+
+2026-10-10：一覧UI簡素化。39 XCTest合格、Simulator一覧配置の目視確認。検索/保存の手動操作と実機反映は未実施。[記録](docs/ui-simplification.md)。
+
+一覧UI簡素化の実機反映：署名build/codesign合格、Vespera更新インストールと更新版起動成功。実機操作は本人確認待ち。[記録](docs/ui-simplification.md)。
+
+2026-10-10：中央開始ボタン。40 XCTest合格、Simulatorプレゼン開始/終了と横長一枚図全画面を操作・目視確認。[記録](docs/reader-start-button.md)。
+
+2026-10-10 図解のまとめ：44 XCTest合格、Simulatorの作成・並べ替え・再起動保持・全画面前後移動を確認。署名build/codesign合格、Vespera更新/起動成功。実機対話操作は未検証。[記録](docs/diagram-collections.md)。

@@ -6,6 +6,8 @@ struct DocumentViewer: View {
     let document: OpenedDocument
     let libraryActions: AnyView?
     let imagePages: ImagePageControls?
+    let externalPageNavigation: Bool
+    let displayIntent: ViewerDisplayIntent
     @StateObject private var pdfSession: PDFReadingSession
     @ObservedObject private var external = ExternalDisplayCoordinator.shared
     @Environment(\.dismiss) private var dismiss
@@ -15,16 +17,20 @@ struct DocumentViewer: View {
     @State private var imagePresenting = false
     @StateObject private var orientation = ViewerOrientationController()
 
-    init(document: OpenedDocument, libraryActions: AnyView? = nil, imagePages: ImagePageControls? = nil) {
+    init(document: OpenedDocument, libraryActions: AnyView? = nil, imagePages: ImagePageControls? = nil, displayIntent: ViewerDisplayIntent = .presentation, externalPageNavigation: Bool = false) {
         self.document = document
         self.libraryActions = libraryActions
         self.imagePages = imagePages
+        self.externalPageNavigation = externalPageNavigation
+        self.displayIntent = displayIntent
         _pdfSession = StateObject(wrappedValue: PDFReadingSession(url: document.format == .pdf ? document.url : nil))
     }
 
     private var isImage: Bool { [.png, .jpg, .jpeg].contains(document.format) }
     private var canPresent: Bool { isImage || (document.format == .pdf && pdfSession.pageCount > 0) }
     private var presenting: Bool { pdfSession.isPresenting || imagePresenting }
+    private var startTitle: String { displayIntent == .illustration ? "全画面表示" : "プレゼンを開始" }
+    private var endTitle: String { displayIntent == .illustration ? "全画面表示を終了" : "プレゼンを終了" }
     private var thumbnailsVisible: Bool { thumbnailPreference ?? (horizontalSizeClass == .regular) }
 
     var body: some View {
@@ -58,7 +64,7 @@ struct DocumentViewer: View {
                             if document.format == .pdf, pdfSession.pageCount > 0 {
                                 Button(thumbnailsVisible ? "ページ一覧を隠す" : "ページ一覧を表示") { thumbnailPreference = !thumbnailsVisible }
                             }
-                            Button("プレゼンを開始") { beginPresentation() }.disabled(!canPresent)
+                            Button(startTitle) { beginPresentation() }.disabled(!canPresent)
                         } label: { Label("表示設定", systemImage: "slider.horizontal.3") }
                     } else {
                     if document.format == .pdf, pdfSession.pageCount > 0 {
@@ -69,7 +75,7 @@ struct DocumentViewer: View {
                         }
                     }
                     Menu {
-                        Button("プレゼンを開始（PDF・画像）", systemImage: "play.rectangle") { beginPresentation() }
+                        Button(startTitle, systemImage: displayIntent == .illustration ? "arrow.up.left.and.arrow.down.right" : "play.rectangle") { beginPresentation() }
                             .disabled(!canPresent)
                         if document.format == .pdf {
                             Label(external.connected ? "外部画面に接続済み" : "外部画面未接続", systemImage: "display")
@@ -86,6 +92,20 @@ struct DocumentViewer: View {
             }
             .toolbar(toolbarVisible && !presenting ? .visible : .hidden, for: .navigationBar)
             .ignoresSafeArea(presenting ? .all : [], edges: .all)
+            .overlay {
+                if !presenting && toolbarVisible && canPresent {
+                    Button(action: beginPresentation) {
+                        Image(systemName: displayIntent == .illustration ? "arrow.up.left.and.arrow.down.right" : "play.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .frame(width: 76, height: 76)
+                            .background(.regularMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(.primary.opacity(0.12)))
+                            .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(startTitle)
+                }
+            }
             .overlay(alignment: .leading) {
                 if hasPages { pageButton(previous: true).padding(.leading, 8) }
             }
@@ -95,7 +115,7 @@ struct DocumentViewer: View {
             .overlay(alignment: .topTrailing) {
                 if presenting {
                     Button(action: endPresentation) { Image(systemName: "xmark") }
-                        .accessibilityLabel("プレゼンを終了").keyboardShortcut(.cancelAction)
+                        .accessibilityLabel(endTitle).keyboardShortcut(.cancelAction)
                         .buttonStyle(PresentationSideButtonStyle())
                         .foregroundStyle(.white).background(.black.opacity(0.45), in: Capsule())
                         .padding(.trailing, 8).padding(.top, 8)
@@ -125,18 +145,19 @@ struct DocumentViewer: View {
     }
 
     private var hasPages: Bool {
-        presenting && (document.format == .pdf || imagePages != nil)
+        if externalPageNavigation { return imagePages != nil }
+        return presenting && displayIntent == .presentation && (document.format == .pdf || imagePages != nil)
     }
 
     private func pageButton(previous: Bool) -> some View {
         Button {
-            if document.format == .pdf { pdfSession.movePage(previous ? -1 : 1) }
+            if document.format == .pdf && !externalPageNavigation { pdfSession.movePage(previous ? -1 : 1) }
             else if previous { imagePages?.previous() }
             else { imagePages?.next() }
         } label: { Image(systemName: previous ? "chevron.left" : "chevron.right") }
         .accessibilityLabel(previous ? "前のページ" : "次のページ")
         .keyboardShortcut(previous ? .leftArrow : .rightArrow, modifiers: [])
-        .disabled(document.format == .pdf
+        .disabled(document.format == .pdf && !externalPageNavigation
             ? (previous ? pdfSession.pageIndex == 0 : pdfSession.pageIndex + 1 >= pdfSession.pageCount)
             : (previous ? imagePages?.canPrevious != true : imagePages?.canNext != true))
         .font(.system(size: 17, weight: .semibold))
@@ -152,7 +173,13 @@ struct DocumentViewer: View {
 
     private func beginPresentation() {
         guard canPresent else { return }
-        orientation.request(.landscape)
+        let contentSize: CGSize?
+        if document.format == .pdf {
+            contentSize = pdfSession.document?.page(at: pdfSession.pageIndex)?.bounds(for: .mediaBox).size
+        } else {
+            contentSize = UIImage(contentsOfFile: document.url.path)?.size
+        }
+        orientation.request(displayIntent.orientation(for: contentSize))
         if document.format == .pdf {
             pdfSession.isPresenting = true
             external.begin(pdfSession)
@@ -224,4 +251,15 @@ struct ImagePageControls {
     let canNext: Bool
     let previous: () -> Void
     let next: () -> Void
+}
+
+/// Library classification determines the action; page count alone does not identify illustrations.
+enum ViewerDisplayIntent {
+    case presentation, illustration
+
+    func orientation(for size: CGSize?) -> UIInterfaceOrientationMask {
+        guard self == .illustration else { return .landscape }
+        guard let size, size.width > 0, size.height > 0 else { return .portrait }
+        return size.width > size.height ? .landscape : .portrait
+    }
 }

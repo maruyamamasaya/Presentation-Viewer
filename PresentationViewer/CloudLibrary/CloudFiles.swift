@@ -27,6 +27,46 @@ actor CloudFileStore {
         }
         return try CloudFileStore(saved: saved, cache: cache)
     }
+    // Shares the user's saved namespace; cache clearing never removes visibility settings.
+    func hiddenDiagrams() throws -> [CloudDiagram] {
+        let url = saved.appendingPathComponent("hidden-diagrams.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let items = try JSONDecoder().decode([CloudDiagram].self, from: Data(contentsOf: url))
+        for item in items { try item.validate() }
+        guard Set(items.map { $0.id.lowercased() }).count == items.count else { throw CloudError.invalidResponse }
+        return items
+    }
+    func setHidden(_ diagram: CloudDiagram, hidden: Bool) throws -> [CloudDiagram] {
+        try diagram.validate()
+        var items = try hiddenDiagrams().filter { $0.id.lowercased() != diagram.id.lowercased() }
+        if hidden { items.append(diagram) }
+        try JSONEncoder().encode(items).write(to: saved.appendingPathComponent("hidden-diagrams.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return items
+    }
+    func collections() throws -> [CloudCollection] {
+        let url = saved.appendingPathComponent("collections.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let values = try JSONDecoder().decode([CloudCollection].self, from: Data(contentsOf: url))
+        for value in values { try value.validate() }
+        guard Set(values.map(\.id)).count == values.count else { throw CloudError.invalidResponse }
+        return values
+    }
+    func saveCollection(_ collection: CloudCollection) throws -> [CloudCollection] {
+        try collection.validate()
+        var values = try collections()
+        if let index = values.firstIndex(where: { $0.id == collection.id }) { values[index] = collection }
+        else { values.append(collection) }
+        try writeCollections(values)
+        return values
+    }
+    func removeCollection(_ id: UUID) throws -> [CloudCollection] {
+        let values = try collections().filter { $0.id != id }
+        try writeCollections(values)
+        return values
+    }
+    private func writeCollections(_ values: [CloudCollection]) throws {
+        try JSONEncoder().encode(values).write(to: saved.appendingPathComponent("collections.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
     func records() throws -> [SavedCloudFile] {
         let url = saved.appendingPathComponent("index.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
@@ -44,6 +84,43 @@ actor CloudFileStore {
         // Hash in cache name avoids overwriting a file that is currently being viewed.
         let url = cache.appendingPathComponent(record.id + "-" + record.file.sha256 + "." + record.file.format.rawValue)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]); return url
+    }
+    /// Only verified bytes for this exact immutable version may be reused.
+    func localURL(_ record: SavedCloudFile) throws -> URL? {
+        try record.validate()
+        if let url = try? open(record) { return url }
+        let url = cache.appendingPathComponent(record.id + "-" + record.file.sha256 + "." + record.file.format.rawValue)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            try verify(Data(contentsOf: url), record: record)
+            return url
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+    }
+    private func detailURL(_ diagram: CloudDiagram) throws -> URL {
+        try diagram.validate()
+        return cache.appendingPathComponent("detail-\(diagram.id.lowercased())-\(diagram.version).json")
+    }
+    func cachedDetail(_ diagram: CloudDiagram) throws -> CloudDetail? {
+        let url = try detailURL(diagram)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            let detail = try JSONDecoder().decode(CloudDetail.self, from: Data(contentsOf: url))
+            try detail.validate()
+            guard detail.id == diagram.id, detail.version == diagram.version,
+                  detail.type == diagram.type, detail.pageCount == diagram.pageCount,
+                  detail.formats == diagram.formats else { throw CloudError.invalidResponse }
+            return detail
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+    }
+    func cacheDetail(_ detail: CloudDetail) throws {
+        try detail.validate()
+        try JSONEncoder().encode(detail).write(to: detailURL(detail.diagram), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
     func save(_ data: Data, record: SavedCloudFile) throws {
         try verify(data, record: record)

@@ -18,6 +18,51 @@ extension CloudLibraryAPI {
         return CloudList(items: items, nextCursor: result.nextCursor)
     }
 }
+/// Counts the complete library through the existing authenticated metadata API.
+/// Artifacts are never downloaded; failures never return a partial total.
+struct CloudCapacity: Sendable {
+    let documentCount: Int
+    let sizeBytes: Int64
+    let updatedAt: Date
+}
+
+extension CloudLibraryAPI {
+    func capacity() async throws -> CloudCapacity {
+        var latest: [String: CloudDiagram] = [:]
+        var cursor: String?
+        var seenCursors = Set<String>()
+        var requested = false
+        repeat {
+            try Task.checkCancellation()
+            if requested { try await Task.sleep(for: .milliseconds(1100)) }
+            requested = true
+            let page = try await list(query: "", cursor: cursor, scope: "all")
+            for item in page.items {
+                try item.validate()
+                if latest[item.id].map({ $0.version < item.version }) ?? true { latest[item.id] = item }
+            }
+            cursor = page.nextCursor
+            if let cursor, !seenCursors.insert(cursor).inserted { throw CloudError.invalidResponse }
+        } while cursor != nil
+        var total: Int64 = 0
+        for item in latest.values.sorted(by: { $0.id < $1.id }) {
+            try Task.checkCancellation()
+            // The deployed API permits one request per second.
+            try await Task.sleep(for: .milliseconds(1100))
+            let detail = try await detail(id: item.id, version: item.version)
+            try detail.validate()
+            guard detail.id == item.id, detail.version == item.version else { throw CloudError.invalidResponse }
+            for file in detail.files {
+                let sum = total.addingReportingOverflow(Int64(file.sizeBytes))
+                guard !sum.overflow else { throw CloudError.invalidResponse }
+                total = sum.partialValue
+            }
+        }
+        try Task.checkCancellation()
+        return CloudCapacity(documentCount: latest.count, sizeBytes: total, updatedAt: Date())
+    }
+}
+
 /// The shipped application uses bundled fixtures only. No AWS or login secrets.
 struct MockCloudAPI: CloudLibraryAPI {
     let folder: URL

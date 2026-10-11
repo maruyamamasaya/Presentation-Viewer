@@ -108,5 +108,37 @@
         "sha256": "6badab6fab4ee3f48d68a5ea0c2daa19668b8384fd4c78e84118078ba16e1559"
       }
     ]
+  },
+  {
+    "id": "40dfe0b6-faec-4a34-8d90-f7c12155f6cf",
+    "title": "説明用サーバー構成（モック）",
+    "type": "illustration",
+    "version": 1,
+    "formats": [
+      "png",
+      "pdf"
+    ],
+    "pageCount": 1,
+    "tags": [
+      "サーバー構成",
+      "画像生成",
+      "説明用"
+    ],
+    "files": [
+      {
+        "name": "diagram.png",
+        "format": "png",
+        "role": "preview",
+        "sizeBytes": 1102266,
+        "sha256": "7c2643308f62cda89395675bd0221e38e0b8433e8128c55a9ff5fa07bca1a404"
+      },
+      {
+        "name": "diagram.pdf",
+        "format": "pdf",
+        "role": "document",
+        "sizeBytes": 738041,
+        "sha256": "a9cfd912e5fc54566fee438722455b2ddde3ca207c87bdafe138dd49673e8984"
+      }
+    ]
   }
 ]

@@ -3,6 +3,8 @@ import PDFKit
 
 @MainActor
 final class CloudLibraryStore: ObservableObject {
+    @Published private(set) var collections: [CloudCollection] = []
+    @Published private(set) var hiddenDiagrams: [CloudDiagram] = []
     @Published private(set) var items: [CloudDiagram] = []
     @Published private(set) var saved: [SavedCloudFile] = []
     @Published private(set) var busy = false
@@ -12,6 +14,7 @@ final class CloudLibraryStore: ObservableObject {
     private var listedQuery = ""
     private var listedScope = "all"
     private let api: any CloudLibraryAPI
+    private var pendingDetails: [String: Task<CloudDetail, Error>] = [:]
     private let files: CloudFileStore
     init(api: any CloudLibraryAPI = MockCloudAPI(), files: CloudFileStore) { self.api = api; self.files = files }
     func refresh(query: String = "", scope: String = "all", more: Bool = false) async {
@@ -22,12 +25,55 @@ final class CloudLibraryStore: ObservableObject {
         busy = true; defer { busy = false }
         do {
             let append = more && query == listedQuery && scope == listedScope
+            collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams()
             let result = try await api.list(query: query, cursor: append ? nextCursor : nil, scope: scope)
             guard !Task.isCancelled else { return }
             items = append ? items + result.items.filter { new in !items.contains(where: { $0.id == new.id }) } : result.items
             listedQuery = query; listedScope = scope
             nextCursor = result.nextCursor; saved = try await files.records(); errorMessage = nil
         } catch { if !Task.isCancelled { errorMessage = message(error) } }
+    }
+    func saveCollection(_ collection: CloudCollection) async -> Bool {
+        do { collections = try await files.saveCollection(collection); errorMessage = nil; return true }
+        catch { errorMessage = message(error); return false }
+    }
+    func removeCollection(_ id: UUID) async -> Bool {
+        do { collections = try await files.removeCollection(id); errorMessage = nil; return true }
+        catch { errorMessage = message(error); return false }
+    }
+    func members(of collection: CloudCollection) -> [CloudDiagram] {
+        collection.resolved(using: items + saved.map(\.diagram), hidden: hiddenDiagrams)
+    }
+    func collectionPages(_ collection: CloudCollection) async throws -> [CloudCollectionPage] {
+        var pages: [CloudCollectionPage] = []
+        for diagram in members(of: collection) {
+            try Task.checkCancellation()
+            let available: [CloudFile]
+            // When no live catalog entry exists, keep the exact saved version usable without network.
+            if !items.contains(where: { $0.id.lowercased() == diagram.id.lowercased() && $0.version == diagram.version }),
+               saved.contains(where: { $0.diagram.id.lowercased() == diagram.id.lowercased() && $0.diagram.version == diagram.version }) {
+                available = saved.filter { $0.diagram.id.lowercased() == diagram.id.lowercased() && $0.diagram.version == diagram.version }.map(\.file)
+            } else { available = try await detail(diagram).files }
+            let selected = collectionReadingFiles(available)
+            guard !selected.isEmpty else { throw CloudError.unavailable }
+            pages += selected.map { CloudCollectionPage(diagram: diagram, file: $0) }
+        }
+        guard !pages.isEmpty else { throw CloudError.unavailable }
+        return pages
+    }
+    func isHidden(_ diagram: CloudDiagram) -> Bool {
+        hiddenDiagrams.contains { $0.id.lowercased() == diagram.id.lowercased() }
+    }
+    func setHidden(_ diagram: CloudDiagram, hidden: Bool) async -> Bool {
+        guard !busy else { return false }
+        busy = true; defer { busy = false }
+        do {
+            let updated = try await files.setHidden(diagram, hidden: hidden)
+            hiddenDiagrams = updated
+            errorMessage = nil
+            notice = hidden ? "このiPhoneで非表示にしました" : "表示に戻しました"
+            return true
+        } catch { errorMessage = message(error); return false }
     }
     private func download(_ diagram: CloudDiagram, file: CloudFile) async throws -> Data {
         for attempt in 0...1 {
@@ -41,21 +87,43 @@ final class CloudLibraryStore: ObservableObject {
         throw CloudError.expiredURL
     }
     func reloadSaved() async {
-        do { saved = try await files.records() } catch { errorMessage = message(error) }
+        do { collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records() } catch { errorMessage = message(error) }
     }
-    func detail(_ diagram: CloudDiagram) async throws -> CloudDetail { try await api.detail(id: diagram.id, version: diagram.version) }
+    func detail(_ diagram: CloudDiagram) async throws -> CloudDetail {
+        try diagram.validate()
+        if let detail = try await files.cachedDetail(diagram) { return detail }
+        let key = "\(diagram.id)-\(diagram.version)"
+        if let task = pendingDetails[key] { return try await task.value }
+        let task = Task { [api, files] in
+            let detail = try await api.detail(id: diagram.id, version: diagram.version)
+            try detail.validate()
+            guard detail.id == diagram.id, detail.version == diagram.version,
+                  detail.type == diagram.type, detail.pageCount == diagram.pageCount,
+                  detail.formats == diagram.formats else { throw CloudError.invalidResponse }
+            try await files.cacheDetail(detail)
+            return detail
+        }
+        pendingDetails[key] = task
+        defer { pendingDetails[key] = nil }
+        return try await task.value
+    }
+    private func localOrDownload(_ diagram: CloudDiagram, file: CloudFile) async throws -> URL {
+        let record = SavedCloudFile(diagram: diagram, file: file)
+        if let url = try await files.localURL(record) { return url }
+        return try await files.cacheData(download(diagram, file: file), record: record)
+    }
     func open(_ diagram: CloudDiagram, file: CloudFile, persist: Bool) async -> OpenedDocument? {
         guard !busy else { return nil }
         busy = true; notice = nil; defer { busy = false }
         do {
             try file.validate(for: diagram)
             let record = SavedCloudFile(diagram: diagram, file: file)
-            let bytes = try await download(diagram, file: file)
+            let local = try await localOrDownload(diagram, file: file)
             let url: URL
             if persist {
-                try await files.save(bytes, record: record); url = try await files.open(record)
+                try await files.save(Data(contentsOf: local), record: record); url = try await files.open(record)
                 saved = try await files.records(); notice = "アプリ内に保存しました。オフラインで開けます。"
-            } else { url = try await files.cacheData(bytes, record: record) }
+            } else { url = local }
             return opened(url, record: record)
         } catch { errorMessage = message(error); return nil }
     }
@@ -87,9 +155,9 @@ final class CloudLibraryStore: ObservableObject {
                 guard let file = preferredCloudFile(candidates.map(\.file)), let record = candidates.first(where: { $0.file == file }) else { return nil }
                 url = try await files.open(record)
             } else {
-                let detail = try await api.detail(id: diagram.id, version: diagram.version)
+                let detail = try await detail(diagram)
                 guard let file = detail.files.first(where: { $0.format == .png && $0.page == 1 }) ?? detail.files.first(where: { $0.format == .pdf }) else { return nil }
-                url = try await files.cacheData(try await download(diagram, file: file), record: SavedCloudFile(diagram: diagram, file: file))
+                url = try await localOrDownload(diagram, file: file)
             }
             if url.pathExtension == "pdf" {
                 return PDFDocument(url: url)?.page(at: 0)?.thumbnail(of: CGSize(width: 420, height: 236), for: .mediaBox)

@@ -4,6 +4,14 @@ import UIKit
 @testable import PresentationViewer
 
 final class ViewerStateTests: XCTestCase {
+    func testFullscreenOrientationFollowsIllustrationAspectRatio() {
+        XCTAssertEqual(ViewerDisplayIntent.illustration.orientation(for: CGSize(width: 1600, height: 900)), .landscape)
+        XCTAssertEqual(ViewerDisplayIntent.illustration.orientation(for: CGSize(width: 900, height: 1600)), .portrait)
+        XCTAssertEqual(ViewerDisplayIntent.illustration.orientation(for: CGSize(width: 1000, height: 1000)), .portrait)
+        XCTAssertEqual(ViewerDisplayIntent.illustration.orientation(for: nil), .portrait)
+        XCTAssertEqual(ViewerDisplayIntent.presentation.orientation(for: CGSize(width: 900, height: 1600)), .landscape)
+    }
+
     @MainActor
     func testOrientationPolicyDefaultsToPortraitAndSupportsPresentation() {
         let delegate = AppOrientationPolicy()

@@ -4,6 +4,226 @@ import UIKit
 @testable import PresentationViewer
 
 final class CloudLibraryTests: XCTestCase {
+    @MainActor
+    func testCollectionOrderPersistsAndRemovalKeepsSavedFiles() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let api = MockCloudAPI()
+        let listed = try await api.list(query: "", cursor: nil)
+        let sample = try XCTUnwrap(listed.items.first { CloudLibraryKind.illustrations.contains($0) && $0.formats.contains(.pdf) })
+        let detail = try await api.detail(id: sample.id, version: sample.version)
+        let pdf = try XCTUnwrap(detail.files.first { $0.format == .pdf })
+        let grant = try await api.access(diagram: sample, file: pdf)
+        let bytes = try await api.download(grant)
+        let second = CloudDiagram(id: UUID().uuidString.lowercased(), title: "続き", type: "illustration", version: 1, formats: [.pdf], pageCount: 1, tags: [])
+        try await files.save(bytes, record: SavedCloudFile(diagram: sample, file: pdf))
+        try await files.save(bytes, record: SavedCloudFile(diagram: second, file: pdf))
+        let store = CloudLibraryStore(api: OfflineAPI(), files: files)
+        let collection = CloudCollection(id: UUID(), title: "2枚の図鑑", members: [second, sample])
+        let saved = await store.saveCollection(collection); XCTAssertTrue(saved)
+        await store.clearCache()
+        let recreated = CloudLibraryStore(api: OfflineAPI(), files: try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: root.appendingPathComponent("cache")))
+        await recreated.reloadSaved()
+        XCTAssertEqual(recreated.collections, [collection])
+        let pages = try await recreated.collectionPages(collection)
+        XCTAssertEqual(pages.map { $0.diagram.id }, [second.id, sample.id])
+        for page in pages { let opened = await recreated.open(page.diagram, file: page.file, persist: false); XCTAssertNotNil(opened) }
+        let isolated = try CloudFileStore(saved: root.appendingPathComponent("other-saved"), cache: root.appendingPathComponent("other-cache"))
+        let other = try await isolated.collections(); XCTAssertTrue(other.isEmpty)
+        let removed = await recreated.removeCollection(collection.id); XCTAssertTrue(removed)
+        XCTAssertTrue(recreated.collections.isEmpty)
+        let records = try await files.records(); XCTAssertEqual(records.count, 2)
+    }
+    func testCollectionValidationAndLatestHiddenResolution() throws {
+        let id = UUID().uuidString.lowercased()
+        let one = CloudDiagram(id: id, title: "前編", type: "illustration", version: 1, formats: [.png], pageCount: 1, tags: [])
+        let newer = CloudDiagram(id: id, title: "前編新版", type: "illustration", version: 2, formats: [.png], pageCount: 1, tags: [])
+        let two = CloudDiagram(id: UUID().uuidString.lowercased(), title: "後編", type: "illustration", version: 1, formats: [.png], pageCount: 1, tags: [])
+        let group = CloudCollection(id: UUID(), title: "図鑑", members: [one, two])
+        try group.validate()
+        XCTAssertEqual(group.resolved(using: [two, newer, one], hidden: []), [newer, two])
+        XCTAssertEqual(group.resolved(using: [newer], hidden: [one]), [two])
+        XCTAssertThrowsError(try CloudCollection(id: UUID(), title: "", members: [one]).validate())
+        XCTAssertThrowsError(try CloudCollection(id: UUID(), title: "重複", members: [one, newer]).validate())
+        XCTAssertThrowsError(try CloudCollection(id: UUID(), title: "空", members: []).validate())
+    }
+    @MainActor
+    func testCollectionWriteFailurePreservesState() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let member = CloudDiagram(id: UUID().uuidString.lowercased(), title: "図解", type: "illustration", version: 1, formats: [.png], pageCount: 1, tags: [])
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("saved/collections.json"), withIntermediateDirectories: true)
+        let store = CloudLibraryStore(files: files)
+        let result = await store.saveCollection(CloudCollection(id: UUID(), title: "まとめ", members: [member]))
+        XCTAssertFalse(result); XCTAssertTrue(store.collections.isEmpty); XCTAssertNotNil(store.errorMessage)
+    }
+    func testCollectionUsesAllPNGPagesInOrderOrPDFOnlyFallback() {
+        func file(_ name: String, _ format: CloudFormat) -> CloudFile { CloudFile(name: name, format: format, sizeBytes: 1, sha256: String(repeating: "a", count: 64), contentType: format.mime) }
+        let png2 = file("slides/002/slide.png", .png), png1 = file("slides/001/slide.png", .png), pdf = file("document.pdf", .pdf)
+        XCTAssertEqual(collectionReadingFiles([png2, pdf, png1]), [png1, png2])
+        XCTAssertEqual(collectionReadingFiles([file("presentation.pptx", .pptx), pdf]), [pdf])
+    }
+
+    @MainActor
+    func testLocalHidePersistsWithoutAPIAndKeepsSavedCopy() async throws {
+        let api = CacheCountingAPI()
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: api, files: files)
+        await store.refresh(query: "RAG")
+        let item = try XCTUnwrap(store.items.first)
+        let detail = try await store.detail(item)
+        let file = try XCTUnwrap(preferredCloudFile(detail.files))
+        let document = await store.open(item, file: file, persist: true)
+        XCTAssertNotNil(document)
+        let before = await api.counts()
+        let hidden = await store.setHidden(item, hidden: true)
+        XCTAssertTrue(hidden); XCTAssertTrue(store.isHidden(item))
+        XCTAssertTrue(store.saved.contains { $0.diagram.id == item.id })
+        let after = await api.counts(); XCTAssertEqual(before, after)
+        await store.clearCache()
+        let recreated = CloudLibraryStore(api: api, files: try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: root.appendingPathComponent("cache")))
+        await recreated.reloadSaved(); XCTAssertTrue(recreated.isHidden(item))
+        let updated = CloudDiagram(id: item.id, title: item.title, type: item.type, version: item.version + 1, formats: item.formats, pageCount: item.pageCount, tags: item.tags)
+        XCTAssertTrue(recreated.isHidden(updated))
+        let otherFiles = try CloudFileStore(saved: root.appendingPathComponent("other-saved"), cache: root.appendingPathComponent("other-cache"))
+        let other = CloudLibraryStore(api: api, files: otherFiles)
+        await other.reloadSaved(); XCTAssertFalse(other.isHidden(item))
+        let restored = await recreated.setHidden(item, hidden: false)
+        XCTAssertTrue(restored); XCTAssertFalse(recreated.isHidden(item))
+        await store.reloadSaved(); XCTAssertFalse(store.isHidden(item))
+    }
+    @MainActor
+    func testLocalHideFailureDoesNotChangeVisibleState() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let item = try await MockCloudAPI().list(query: "", cursor: nil).items[0]
+        let store = CloudLibraryStore(files: files)
+        let url = root.appendingPathComponent("saved/hidden-diagrams.json")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let hidden = await store.setHidden(item, hidden: true)
+        XCTAssertFalse(hidden); XCTAssertFalse(store.isHidden(item)); XCTAssertNotNil(store.errorMessage)
+    }
+    @MainActor
+    func testCacheReusedAfterRecreationAndNewVersionDownloaded() async throws {
+        let api = CacheCountingAPI()
+        let item = try await api.list(query: "RAG", cursor: nil).items[0]
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: api, files: files)
+        let detail = try await store.detail(item)
+        let file = try XCTUnwrap(preferredCloudFile(detail.files))
+        let result613 = await store.open(item, file: file, persist: false)
+        XCTAssertNotNil(result613)
+        let result689 = await store.thumbnail(item, offline: false)
+        XCTAssertNotNil(result689)
+        let initial = await api.counts()
+        XCTAssertEqual(initial, [1, 2, 2])
+        let recreated = CloudLibraryStore(api: api, files: try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: root.appendingPathComponent("cache")))
+        _ = try await recreated.detail(item)
+        let result1056 = await recreated.open(item, file: file, persist: true)
+        XCTAssertNotNil(result1056)
+        let result1135 = await recreated.thumbnail(item, offline: false)
+        XCTAssertNotNil(result1135)
+        let reused = await api.counts(); XCTAssertEqual(reused, initial)
+        let newer = CloudDiagram(id: item.id, title: item.title, type: item.type, version: 2, formats: item.formats, pageCount: item.pageCount, tags: item.tags)
+        let updated = try await recreated.detail(newer)
+        let result1498 = await recreated.open(newer, file: try XCTUnwrap(preferredCloudFile(updated.files)), persist: false)
+        XCTAssertNotNil(result1498)
+        let changed = await api.counts(); XCTAssertEqual(changed, [2, 3, 3])
+        await recreated.clearCache()
+        let result1737 = await recreated.open(item, file: file, persist: false)
+        XCTAssertNotNil(result1737)
+        let savedReuse = await api.counts(); XCTAssertEqual(savedReuse, changed)
+    }
+    @MainActor
+    func testCorruptCacheRefetchedAndCacheClearDownloadsAgain() async throws {
+        let api = CacheCountingAPI()
+        let item = try await api.list(query: "RAG", cursor: nil).items[0]
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: api, files: files)
+        let detail = try await store.detail(item)
+        let file = try XCTUnwrap(preferredCloudFile(detail.files))
+        let opened = await store.open(item, file: file, persist: false)
+        let url = try XCTUnwrap(opened?.url)
+        try Data("corrupt".utf8).write(to: url)
+        let recovered = await store.open(item, file: file, persist: false)
+        XCTAssertNotNil(recovered)
+        XCTAssertEqual(cloudHash(try Data(contentsOf: url)), file.sha256)
+        let counts = await api.counts(); XCTAssertEqual(counts, [1, 2, 2])
+        await store.clearCache()
+        _ = try await store.detail(item)
+        let reopened = await store.open(item, file: file, persist: false)
+        XCTAssertNotNil(reopened)
+        let cleared = await api.counts(); XCTAssertEqual(cleared, [2, 3, 3])
+    }
+    @MainActor
+    func testCachedDetailAndFilesWorkWithoutNetworkAndStayIsolated() async throws {
+        let api = MockCloudAPI()
+        let item = try await api.list(query: "RAG", cursor: nil).items[0]
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let online = CloudLibraryStore(api: api, files: files)
+        let detail = try await online.detail(item)
+        let file = try XCTUnwrap(preferredCloudFile(detail.files))
+        let initial = await online.open(item, file: file, persist: false)
+        XCTAssertNotNil(initial)
+        let offline = CloudLibraryStore(api: OfflineAPI(), files: files)
+        let cached = try await offline.detail(item)
+        XCTAssertEqual(cached.files, detail.files)
+        let reopened = await offline.open(item, file: file, persist: false)
+        XCTAssertNotNil(reopened)
+        let other = try CloudFileStore(saved: root.appendingPathComponent("other-saved"), cache: root.appendingPathComponent("other-cache"))
+        let isolated = try await other.localURL(SavedCloudFile(diagram: item, file: file))
+        let isolatedDetail = try await other.cachedDetail(item)
+        XCTAssertNil(isolated); XCTAssertNil(isolatedDetail)
+        let detailURL = root.appendingPathComponent("cache/detail-\(item.id.lowercased())-\(item.version).json")
+        try Data("invalid".utf8).write(to: detailURL)
+        let corrupt = try await files.cachedDetail(item)
+        XCTAssertNil(corrupt)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: detailURL.path))
+    }
+    @MainActor
+    func testConnectionIsReadyBeforeFirstTabRender() async throws {
+        let config = try CloudConnection.bundled()
+        let state = CloudConnectionState(makeAuth: { try CloudOIDC(config: config, readTokens: { nil }) })
+        XCTAssertNotNil(state.auth)
+        XCTAssertFalse(state.failed)
+    }
+    @MainActor
+    func testSharedConnectionRetriesFailureAndKeepsOneAuthForTabs() async throws {
+        let config = try CloudConnection.bundled()
+        var attempts = 0
+        let state = CloudConnectionState(makeAuth: {
+            attempts += 1
+            if attempts == 1 { throw CloudError.unavailable }
+            return try CloudOIDC(config: config, readTokens: { nil })
+        }, startImmediately: false)
+        state.initialize(); XCTAssertTrue(state.failed); XCTAssertNil(state.auth)
+        state.initialize(); XCTAssertFalse(state.failed); XCTAssertNotNil(state.auth)
+        let auth = state.auth
+        state.initialize(); XCTAssertEqual(attempts, 2); XCTAssertTrue(auth === state.auth)
+    }
+    @MainActor
+    func testConfiguredConnectionSurvivesUnavailableSavedLogin() async throws {
+        let config = try CloudConnection.bundled()
+        let auth = try CloudOIDC(config: config, readTokens: { throw CloudError.authentication })
+        XCTAssertEqual(auth.config.api, config.api)
+        XCTAssertNil(auth.namespace)
+        XCTAssertNotNil(auth.message)
+        let empty = try CloudOIDC(config: config, readTokens: { nil })
+        XCTAssertNil(empty.message)
+    }
+    func testCapacityCountsAllPagesAndOnlyLatestVersions() async throws {
+        let api = CapacityTestAPI()
+        let value = try await api.capacity()
+        XCTAssertEqual(value.documentCount, 2)
+        XCTAssertEqual(value.sizeBytes, 600)
+        XCTAssertLessThan(abs(value.updatedAt.timeIntervalSinceNow), 5)
+        let empty = try await CapacityTestAPI(empty: true).capacity()
+        XCTAssertEqual(empty.documentCount, 0)
+        XCTAssertEqual(empty.sizeBytes, 0)
+    }
+    func testCapacityRejectsPartialFailureAndCursorLoop() async {
+        for api in [CapacityTestAPI(failing: true), CapacityTestAPI(loop: true)] {
+            do { _ = try await api.capacity(); XCTFail("Partial or looping total accepted") }
+            catch { XCTAssertTrue(error is CloudError) }
+        }
+    }
     func testPKCEAndCallbackRejectWrongStateAndDuplicateCode() throws {
         XCTAssertEqual(oidcChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
         let redirect = "presentationviewer://oauth/callback"
@@ -111,7 +331,7 @@ final class CloudLibraryTests: XCTestCase {
                 XCTAssertEqual(data.count, file.sizeBytes); XCTAssertEqual(cloudHash(data), file.sha256)
                 formats.insert(file.format)
                 if file.format == .png { XCTAssertNotNil(UIImage(data: data)) }
-                if file.format == .pdf { XCTAssertEqual(PDFDocument(data: data)?.pageCount, 8) }
+                if file.format == .pdf { XCTAssertEqual(PDFDocument(data: data)?.pageCount, item.pageCount) }
                 if file.format == .pptx { XCTAssertEqual(Array(data.prefix(2)), [0x50, 0x4b]) }
             }
         }
@@ -218,4 +438,80 @@ private final class OIDCTestProtocol: URLProtocol {
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
     override func stopLoading() {}
+}
+
+private struct CapacityTestAPI: CloudLibraryAPI {
+    var empty = false
+    var failing = false
+    var loop = false
+    private let first = "00000000-0000-4000-8000-000000000001"
+    private let second = "00000000-0000-4000-8000-000000000002"
+    private func item(_ id: String, _ version: Int) -> CloudDiagram {
+        CloudDiagram(id: id, title: "容量試験", type: "presentation", version: version,
+                     formats: [.pdf, .pptx, .png], pageCount: 2, tags: [])
+    }
+    func list(query: String, cursor: String?) async throws -> CloudList {
+        XCTAssertEqual(query, "")
+        if empty { return CloudList(items: [], nextCursor: nil) }
+        if cursor == nil { return CloudList(items: [item(first, 1)], nextCursor: "next") }
+        return CloudList(items: [item(first, 2), item(second, 1)], nextCursor: loop ? "next" : nil)
+    }
+    func detail(id: String, version: Int) async throws -> CloudDetail {
+        if failing && id == second { throw CloudError.unavailable }
+        if id == first { XCTAssertEqual(version, 2) }
+        let diagram = item(id, version)
+        let files = [("document.pdf", CloudFormat.pdf, 100), ("presentation.pptx", .pptx, 100),
+                     ("slides/001/slide.png", .png, 50), ("slides/002/slide.png", .png, 50)]
+            .map { CloudFile(name: $0.0, format: $0.1, sizeBytes: $0.2,
+                            sha256: String(repeating: "a", count: 64), contentType: $0.1.mime) }
+        return CloudDetail(id: id, title: diagram.title, type: diagram.type, version: version,
+                           formats: diagram.formats, pageCount: 2, tags: [], files: files)
+    }
+    func access(diagram: CloudDiagram, file: CloudFile) async throws -> CloudGrant {
+        XCTFail("Capacity must not request artifact access"); throw CloudError.invalidResponse
+    }
+    func download(_ grant: CloudGrant) async throws -> Data {
+        XCTFail("Capacity must not download artifacts"); throw CloudError.invalidResponse
+    }
+}
+
+final class CloudLibraryKindTests: XCTestCase {
+    func testTypeClassificationKeepsSingleSlidePresentationSeparate() {
+        func item(_ type: String, pages: Int = 1) -> CloudDiagram {
+            CloudDiagram(id: "40dfe0b6-faec-4a34-8d90-f7c12155f6cf", title: "Test", type: type, version: 1, formats: [.png, .pdf], pageCount: pages, tags: [])
+        }
+        XCTAssertTrue(CloudLibraryKind.presentations.contains(item("presentation")))
+        XCTAssertFalse(CloudLibraryKind.illustrations.contains(item("presentation")))
+        for type in ["illustration", "roadmap", "architecture", "flowchart", "comparison"] {
+            XCTAssertTrue(CloudLibraryKind.illustrations.contains(item(type)))
+            XCTAssertFalse(CloudLibraryKind.presentations.contains(item(type)))
+        }
+        XCTAssertTrue(CloudLibraryKind.presentations.contains(item("legacy")))
+    }
+    func testIllustrationFileNamesRejectPresentationAndExtraPage() throws {
+        let diagram = CloudDiagram(id: "40dfe0b6-faec-4a34-8d90-f7c12155f6cf", title: "Test", type: "illustration", version: 1, formats: [.png, .pdf], pageCount: 1, tags: [])
+        let valid = CloudFile(name: "diagram.pdf", format: .pdf, sizeBytes: 10, sha256: String(repeating: "a", count: 64), contentType: "application/pdf")
+        XCTAssertNoThrow(try valid.validate(for: diagram))
+        let invalid = CloudFile(name: "document.pdf", format: .pdf, sizeBytes: 10, sha256: valid.sha256, contentType: valid.contentType)
+        XCTAssertThrowsError(try invalid.validate(for: diagram))
+    }
+}
+
+private actor CacheCountingAPI: CloudLibraryAPI {
+    let mock = MockCloudAPI()
+    var details = 0, grants = 0, downloads = 0
+    func counts() -> [Int] { [details, grants, downloads] }
+    func list(query: String, cursor: String?) async throws -> CloudList { try await mock.list(query: query, cursor: cursor) }
+    func detail(id: String, version: Int) async throws -> CloudDetail {
+        details += 1
+        let original = try await mock.detail(id: id, version: 1)
+        return CloudDetail(id: original.id, title: original.title, type: original.type, version: version,
+                           formats: original.formats, pageCount: original.pageCount, tags: original.tags, files: original.files)
+    }
+    func access(diagram: CloudDiagram, file: CloudFile) async throws -> CloudGrant {
+        grants += 1
+        let original = try await mock.detail(id: diagram.id, version: 1)
+        return try await mock.access(diagram: original.diagram, file: file)
+    }
+    func download(_ grant: CloudGrant) async throws -> Data { downloads += 1; return try await mock.download(grant) }
 }
