@@ -33,3 +33,11 @@ Phase 11B-3：実Cognito設定・S3公開ブロックを読取確認。本人登
 2026-10-10：図解の端末内「まとめ」を追加。複数資料を1カードに整理し、名前/読む順番の編集・まとめ解除・全画面前後移動・使用ページの一括保存に対応。利用者別の設定を再起動/キャッシュ削除後も保持。AWS/API変更なし。[仕様・検証](docs/diagram-collections.md)。
 
 図解まとめの検証・反映：最終44 XCTestと署名build/codesign合格。Simulatorで作成/順番編集/再起動保持/横画面全画面のページ移動を確認し、Vesperaへ更新・起動成功。本人の実機操作は確認待ち。[証跡](docs/diagram-collections.md)。
+
+2026-10-12：一時コピーのオフライン再起動一覧を追加。取得済み形式だけで開き、通信復帰時は通常一覧へ戻る。確認付きの端末資料一括削除を追加。AWS変更なし。[検証](docs/offline-copies-validation.md)。
+
+端末コピー改善版：2026-10-12本人依頼でVesperaへ署名更新インストール・起動成功。本人の操作確認は未実施。[証跡](docs/offline-copies-validation.md)。
+
+2026-10-12：認証エラーとその他メニューから直接再ログインできる導線、成功後の一覧再読込、タブ選択状態の明示保持を追加。端末コピーは保持。Simulator 46 XCTest合格。実認証・タブの実機確認と実機更新は未実施。[記録](docs/reauthentication-validation.md)。
+
+実機反映（2026-10-12 JST）：本人のデプロイ依頼後、既存Teamで署名Debug buildとcodesign検証合格。Vesperaへ同Bundle IDで更新インストールし、10:49 JSTに既存プロセス終了・更新版起動成功。端末資料の削除やアンインストールなし。本人の再ログイン/タブ操作確認は未実施。証跡：outputs/reauthentication/device-{build,install,launch}.log。

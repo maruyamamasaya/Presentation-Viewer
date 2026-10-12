@@ -12,11 +12,12 @@ struct PresentationViewerApp: App {
 private struct AppLibraryTabs: View {
     @AppStorage("cloudProduction") private var production = false
     @State private var settings = false
+    @State private var selectedTab = CloudLibraryKind.presentations.rawValue
     @StateObject private var connection = CloudConnectionState()
     @Environment(\.scenePhase) private var scenePhase
     private let files = Result { try CloudFileStore.applicationStore() }
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             ForEach(CloudLibraryKind.allCases, id: \.rawValue) { kind in
             Group {
                 switch files {
@@ -26,9 +27,9 @@ private struct AppLibraryTabs: View {
                     } else { CloudLibraryView(files: files, kind: kind, onSettings: { settings = true }) }
                 case .failure: ContentUnavailableView("保存領域を準備できません", systemImage: "externaldrive.badge.exclamationmark")
                 }
-            }.tabItem { Label(kind.title, systemImage: kind == .presentations ? "square.stack" : "rectangle.on.rectangle") }
+            }.tag(kind.rawValue).tabItem { Label(kind.title, systemImage: kind == .presentations ? "square.stack" : "rectangle.on.rectangle") }
             }
-            LibraryView().tabItem { Label("ローカル資料", systemImage: "folder") }
+            LibraryView().tag("local").tabItem { Label("ローカル資料", systemImage: "folder") }
         }
         .task { connection.initialize() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { connection.initialize(); connection.auth?.restoreSession() } }
@@ -106,7 +107,7 @@ private struct CloudProductionView: View {
             if let namespace = auth.namespace {
                 switch Result(catching: { (try CloudFileStore.applicationStore(namespace: namespace), try HTTPSCloudAPI(baseURL: auth.config.api, allowedArtifactHosts: Set(auth.config.artifactHosts), tokens: auth)) }) {
                 case .success(let connection):
-                    CloudLibraryView(files: connection.0, kind: kind, api: connection.1, production: true, onSettings: onSettings, onLogout: { Task { await auth.logout() } }).id(namespace)
+                    CloudLibraryView(files: connection.0, kind: kind, api: connection.1, production: true, onSettings: onSettings, onLogout: { Task { await auth.logout() } }, onReauthenticate: { Task { await auth.login() } }).id("\(namespace)-\(auth.loginRevision)")
                 case .failure: ContentUnavailableView("接続を準備できません", systemImage: "cloud")
                 }
             } else {

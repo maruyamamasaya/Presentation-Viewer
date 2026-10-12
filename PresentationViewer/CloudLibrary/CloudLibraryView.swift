@@ -22,17 +22,20 @@ struct CloudLibraryView: View {
     @State private var collectionReading: CloudCollectionReading?
     @State private var opening = false
     @State private var showCapacity = false
+    @State private var showClearDocuments = false
     @State private var showHidden = false
     @State private var hideCandidate: CloudDiagram?
     private let api: any CloudLibraryAPI
     let onSettings: (() -> Void)?
     let onLogout: (() -> Void)?
+    let onReauthenticate: (() -> Void)?
     let production: Bool
     let kind: CloudLibraryKind
-    init(files: CloudFileStore, kind: CloudLibraryKind = .presentations, api: any CloudLibraryAPI = MockCloudAPI(), production: Bool = false, onSettings: (() -> Void)? = nil, onLogout: (() -> Void)? = nil) {
+    init(files: CloudFileStore, kind: CloudLibraryKind = .presentations, api: any CloudLibraryAPI = MockCloudAPI(), production: Bool = false, onSettings: (() -> Void)? = nil, onLogout: (() -> Void)? = nil, onReauthenticate: (() -> Void)? = nil) {
         self.kind = kind
         self.api = api
         self.production = production; self.onSettings = onSettings; self.onLogout = onLogout
+        self.onReauthenticate = onReauthenticate
         _store = StateObject(wrappedValue: CloudLibraryStore(api: api, files: files))
     }
     private var savedDiagrams: [CloudDiagram] {
@@ -156,9 +159,11 @@ struct CloudLibraryView: View {
                     }
                     Button("登録資料の容量", systemImage: "externaldrive") { showCapacity = true }
                     if let onSettings { Button("接続設定", systemImage: "gear") { onSettings() } }
+                    if let onReauthenticate { Button("ログインし直す", systemImage: "person.crop.circle.badge.checkmark", action: onReauthenticate) }
                     if let onLogout { Button("ログアウト", systemImage: "rectangle.portrait.and.arrow.right") { onLogout() } }
                     Button("一覧を更新", systemImage: "arrow.clockwise") { Task { await refresh() } }
                     Button("一時キャッシュを削除", systemImage: "trash") { Task { await store.clearCache() } }
+                    Button("端末の資料をすべて削除", systemImage: "trash", role: .destructive) { showClearDocuments = true }
                 } label: { Label("その他", systemImage: "ellipsis") }.disabled(opening || store.busy)
                 }
             }
@@ -176,12 +181,17 @@ struct CloudLibraryView: View {
                 if phase == .active { Task { await store.reloadSaved(); await refresh() } }
             }
         }
+        .confirmationDialog("端末の資料をすべて削除しますか？", isPresented: $showClearDocuments, titleVisibility: .visible) {
+            Button("端末の資料を削除", role: .destructive) { Task { await store.clearLocalDocuments() } }
+        } message: {
+            Text("保存済み資料と一時キャッシュを両ライブラリから削除します。S3の正本、ローカル資料タブのファイル、まとめ・非表示の設定は残ります。再取得には通信が必要です。")
+        }
         .sheet(isPresented: $showCapacity) { CloudCapacityView(api: api, production: production) }
         .sheet(item: $collectionDraft) { draft in
             CloudCollectionEditor(collection: draft, choices: collectionChoices, store: store)
         }
         .fullScreenCover(item: $collectionReading) { CloudCollectionReader(reading: $0, store: store) }
-        .fullScreenCover(item: $reading) { CloudReader(reading: $0, store: store) }
+        .fullScreenCover(item: $reading) { CloudReader(reading: $0, store: store, onReauthenticate: onReauthenticate) }
         .alert("このiPhoneで非表示にしますか？", isPresented: Binding(get: { hideCandidate != nil }, set: { if !$0 { hideCandidate = nil } })) {
             Button("キャンセル", role: .cancel) { hideCandidate = nil }
             Button("非表示にする", role: .destructive) {
@@ -190,6 +200,9 @@ struct CloudLibraryView: View {
             }
         } message: { Text("「\(hideCandidate?.title ?? "")」をこのiPhoneの一覧から隠します。「非表示の資料」から戻せます。クラウドの資料と保存したファイルは残ります。") }
         .alert("操作を完了できません", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
+            if store.errorMessage == CloudError.authentication.errorDescription, let onReauthenticate {
+                Button("ログインし直す") { store.errorMessage = nil; onReauthenticate() }
+            }
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
     }
@@ -308,7 +321,9 @@ private struct CloudReader: View {
     @State private var saving = false
     @State private var switching = false
     @State private var showInfo = false
-    init(reading: CloudReading, store: CloudLibraryStore) {
+    let onReauthenticate: (() -> Void)?
+    init(reading: CloudReading, store: CloudLibraryStore, onReauthenticate: (() -> Void)? = nil) {
+        self.onReauthenticate = onReauthenticate
         self.reading = reading; self.store = store
         _document = State(initialValue: reading.document); _file = State(initialValue: reading.initial)
     }
@@ -332,6 +347,9 @@ private struct CloudReader: View {
                 }
             }
             .alert("操作を完了できません", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
+                if store.errorMessage == CloudError.authentication.errorDescription, let onReauthenticate {
+                    Button("ログインし直す") { store.errorMessage = nil; onReauthenticate() }
+                }
                 Button("OK") { store.errorMessage = nil }
             } message: { Text(store.errorMessage ?? "") }
     }

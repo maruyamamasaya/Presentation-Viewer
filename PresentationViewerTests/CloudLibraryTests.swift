@@ -5,6 +5,50 @@ import UIKit
 
 final class CloudLibraryTests: XCTestCase {
     @MainActor
+    func testTemporaryCopiesReturnAfterOfflineRestartAndCleanup() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let api = MockCloudAPI()
+        let item = try await api.list(query: "RAG", cursor: nil).items[0]
+        let online = CloudLibraryStore(api: api, files: files)
+        let detail = try await online.detail(item)
+        let pdf = try XCTUnwrap(preferredCloudFile(detail.files))
+        let first = await online.open(item, file: pdf, persist: false)
+        XCTAssertNotNil(first)
+        let restarted = CloudLibraryStore(api: OfflineAPI(), files: try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: root.appendingPathComponent("cache")))
+        await restarted.reloadSaved()
+        XCTAssertEqual(restarted.items, [item])
+        await restarted.refresh()
+        XCTAssertTrue(restarted.offline); XCTAssertNil(restarted.errorMessage)
+        let offlineDetail = try await restarted.detail(item)
+        XCTAssertEqual(offlineDetail.files, [pdf])
+        let reopened = await restarted.open(item, file: pdf, persist: false)
+        XCTAssertNotNil(reopened)
+        await restarted.clearCache()
+        XCTAssertTrue(restarted.items.isEmpty)
+        await restarted.refresh()
+        XCTAssertTrue(restarted.items.isEmpty)
+    }
+    @MainActor
+    func testLocalCleanupKeepsPreferencesAndOnlineSource() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let api = MockCloudAPI()
+        let item = try await api.list(query: "RAG", cursor: nil).items[0]
+        let store = CloudLibraryStore(api: api, files: files)
+        let detail = try await store.detail(item)
+        let pdf = try XCTUnwrap(preferredCloudFile(detail.files))
+        let opened = await store.open(item, file: pdf, persist: true)
+        XCTAssertNotNil(opened)
+        _ = try await files.setHidden(item, hidden: true)
+        await store.clearLocalDocuments()
+        XCTAssertTrue(store.saved.isEmpty)
+        let copies = try await files.cachedDiagrams(); XCTAssertTrue(copies.isEmpty)
+        let hidden = try await files.hiddenDiagrams(); XCTAssertEqual(hidden, [item])
+        await store.refresh()
+        XCTAssertFalse(store.items.isEmpty); XCTAssertFalse(store.offline)
+        let fetched = await store.open(item, file: pdf, persist: false)
+        XCTAssertNotNil(fetched)
+    }
+    @MainActor
     func testCollectionOrderPersistsAndRemovalKeepsSavedFiles() async throws {
         let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
         let api = MockCloudAPI()

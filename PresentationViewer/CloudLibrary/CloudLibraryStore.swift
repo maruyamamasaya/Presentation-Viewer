@@ -7,6 +7,7 @@ final class CloudLibraryStore: ObservableObject {
     @Published private(set) var hiddenDiagrams: [CloudDiagram] = []
     @Published private(set) var items: [CloudDiagram] = []
     @Published private(set) var saved: [SavedCloudFile] = []
+    @Published private(set) var offline = false
     @Published private(set) var busy = false
     @Published private(set) var nextCursor: String?
     @Published var errorMessage: String?
@@ -26,12 +27,24 @@ final class CloudLibraryStore: ObservableObject {
         do {
             let append = more && query == listedQuery && scope == listedScope
             collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams()
+            saved = try await files.records()
             let result = try await api.list(query: query, cursor: append ? nextCursor : nil, scope: scope)
             guard !Task.isCancelled else { return }
             items = append ? items + result.items.filter { new in !items.contains(where: { $0.id == new.id }) } : result.items
+            offline = false
             listedQuery = query; listedScope = scope
             nextCursor = result.nextCursor; saved = try await files.records(); errorMessage = nil
-        } catch { if !Task.isCancelled { errorMessage = message(error) } }
+        } catch {
+            guard !Task.isCancelled else { return }
+            do {
+                items = try await files.cachedDiagrams()
+                saved = try await files.records()
+                offline = true; nextCursor = nil
+                if !items.isEmpty || !saved.isEmpty {
+                    errorMessage = nil; notice = "端末にある資料を表示しています。接続時に一覧を更新してください。"
+                } else { errorMessage = message(error) }
+            } catch { errorMessage = message(error) }
+        }
     }
     func saveCollection(_ collection: CloudCollection) async -> Bool {
         do { collections = try await files.saveCollection(collection); errorMessage = nil; return true }
@@ -87,11 +100,18 @@ final class CloudLibraryStore: ObservableObject {
         throw CloudError.expiredURL
     }
     func reloadSaved() async {
-        do { collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records() } catch { errorMessage = message(error) }
+        do { collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records(); if items.isEmpty { items = try await files.cachedDiagrams(); offline = true } } catch { errorMessage = message(error) }
     }
     func detail(_ diagram: CloudDiagram) async throws -> CloudDetail {
         try diagram.validate()
-        if let detail = try await files.cachedDetail(diagram) { return detail }
+        if let detail = try await files.cachedDetail(diagram) {
+            if offline {
+                let local = try await files.localFiles(detail)
+                return CloudDetail(id: detail.id, title: detail.title, type: detail.type, version: detail.version,
+                                   formats: detail.formats, pageCount: detail.pageCount, tags: detail.tags, files: local)
+            }
+            return detail
+        }
         let key = "\(diagram.id)-\(diagram.version)"
         if let task = pendingDetails[key] { return try await task.value }
         let task = Task { [api, files] in
@@ -132,8 +152,18 @@ final class CloudLibraryStore: ObservableObject {
         catch { errorMessage = message(error); return nil }
     }
     func clearCache() async {
-        do { try await files.clearCache(); notice = "一時キャッシュを削除しました。保存済み資料は残っています。" }
+        guard !busy else { return }
+        do { try await files.clearCache(); if offline { items = [] }; notice = "一時キャッシュを削除しました。保存済み資料は残っています。" }
         catch { errorMessage = message(error) }
+    }
+    func clearLocalDocuments() async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
+        do {
+            try await files.clearLocalDocuments()
+            saved = []; if offline { items = [] }
+            errorMessage = nil; notice = "端末の資料を削除しました。S3の資料は残っています。"
+        } catch { await reloadSaved(); errorMessage = message(error) }
     }
     func saveOpened(_ document: OpenedDocument, record: SavedCloudFile) async -> Bool {
         guard !busy else { return false }

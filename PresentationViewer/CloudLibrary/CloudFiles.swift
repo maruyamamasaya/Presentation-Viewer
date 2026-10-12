@@ -122,6 +122,33 @@ actor CloudFileStore {
         try detail.validate()
         try JSONEncoder().encode(detail).write(to: detailURL(detail.diagram), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
+    /// Recover browsable copies after restart, without trusting an unverified cache file.
+    func cachedDiagrams() throws -> [CloudDiagram] {
+        var diagrams: [CloudDiagram] = []
+        for url in try FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)
+            where url.lastPathComponent.hasPrefix("detail-") && url.pathExtension == "json" {
+            guard let detail = try? JSONDecoder().decode(CloudDetail.self, from: Data(contentsOf: url)),
+                  (try? detail.validate()) != nil else { continue }
+            for file in detail.files where file.format != .svg {
+                if try localURL(SavedCloudFile(diagram: detail.diagram, file: file)) != nil {
+                    diagrams.append(detail.diagram); break
+                }
+            }
+        }
+        return diagrams.sorted { $0.version > $1.version }
+    }
+    func localFiles(_ detail: CloudDetail) throws -> [CloudFile] {
+        try detail.files.filter { try localURL(SavedCloudFile(diagram: detail.diagram, file: $0)) != nil }
+    }
+    /// Remove document copies only; collections and hidden preferences belong to the user.
+    func clearLocalDocuments() throws {
+        for record in try records() {
+            let url = saved.appendingPathComponent(record.relativeName)
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+        }
+        try JSONEncoder().encode([SavedCloudFile]()).write(to: saved.appendingPathComponent("index.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try clearCache()
+    }
     func save(_ data: Data, record: SavedCloudFile) throws {
         try verify(data, record: record)
         var index = try records()

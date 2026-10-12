@@ -78,6 +78,7 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
     @Published private(set) var subject: String?
     @Published var message: String?
     @Published private(set) var working = false
+    @Published private(set) var loginRevision = 0
     private var tokens: CloudTokens?
     private var browser: ASWebAuthenticationSession?
     private var generation = UUID()
@@ -116,7 +117,9 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
             browser = nil
             let code = try oidcCode(callback, redirect: config.redirect, state: state)
             let value = try await exchange(["grant_type": "authorization_code", "client_id": config.clientID, "redirect_uri": config.redirect, "code": code, "code_verifier": verifier], old: nil)
+            generation = UUID(); refreshTask?.cancel(); refreshTask = nil
             try keychain.write(value); tokens = value; subject = value.subject; message = nil
+            loginRevision += 1
         } catch { message = "ログインできませんでした。認証と接続設定を確認してください。" }
     }
     private func post(_ path: String, values: [String: String]) async throws -> Data {
