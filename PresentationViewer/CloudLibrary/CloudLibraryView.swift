@@ -14,6 +14,8 @@ struct CloudLibraryView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store: CloudLibraryStore
+    @State private var drawerPresented = false
+    private var phoneUI: Bool { UIDevice.current.userInterfaceIdiom == .phone }
     @State private var selectedGroup = "すべて"
     @State private var selectedTag = ""
     @State private var classificationDraft: CloudDiagram?
@@ -82,8 +84,10 @@ struct CloudLibraryView: View {
         let landscapeColumns = dynamicTypeSize.isAccessibilitySize || geometry.size.width < 600 ? 2 : 3
         NavigationStack {
             VStack(spacing: 0) {
-                classificationControls
-                if showSearch { searchControls }
+                if !phoneUI {
+                    classificationControls
+                    if showSearch { searchControls }
+                }
                 ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if showHidden {
@@ -171,7 +175,7 @@ struct CloudLibraryView: View {
                     if !showHidden && store.nextCursor != nil {
                         Button("さらに表示") { Task { await refresh(more: true) } }
                     }
-                }.padding()
+                }.padding().padding(.bottom, phoneUI ? 60 : 0)
             }
             }
             .navigationTitle(showHidden ? "非表示の資料" : kind.title)
@@ -187,18 +191,40 @@ struct CloudLibraryView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button(showHidden ? "資料一覧に戻る" : "非表示の資料", systemImage: showHidden ? "doc.richtext" : "eye.slash") { showHidden.toggle() }
-                    if kind == .illustrations && !showHidden {
-                        Button("図解をまとめる", systemImage: "rectangle.stack.badge.plus") { collectionDraft = CloudCollection(id: UUID(), title: "", members: []) }
-                    }
-                    Button("登録資料の容量", systemImage: "externaldrive") { showCapacity = true }
-                    if let onSettings { Button("接続設定", systemImage: "gear") { onSettings() } }
-                    if let onReauthenticate { Button("ログインし直す", systemImage: "person.crop.circle.badge.checkmark", action: onReauthenticate) }
-                    if let onLogout { Button("ログアウト", systemImage: "rectangle.portrait.and.arrow.right") { onLogout() } }
-                    Button("一覧を更新", systemImage: "arrow.clockwise") { Task { await refresh() } }
-                    Button("一時キャッシュを削除", systemImage: "trash") { Task { await store.clearCache() } }
-                    Button("端末の資料をすべて削除", systemImage: "trash", role: .destructive) { showClearDocuments = true }
+                    libraryActions
                 } label: { Label("その他", systemImage: "ellipsis") }.disabled(opening || store.busy)
+                }
+            }
+            .toolbar(phoneUI ? .hidden : .visible, for: .navigationBar)
+            .overlay {
+                if phoneUI {
+                    LibraryDrawer(isPresented: $drawerPresented, filterSummary: [showHidden ? "非表示" : "", selectedGroup == "すべて" ? "" : selectedGroup, selectedTag, query].filter { !$0.isEmpty }.joined(separator: " · ")) {
+                        Text("検索").font(.headline)
+                        searchControls
+                        Button("検索結果を見る") { searchFocused = false; withAnimation { drawerPresented = false } }
+                            .frame(minHeight: 44)
+                        Text("グループ").font(.headline)
+                        ForEach(["すべて"] + LibraryGroup.allCases.map(\.rawValue), id: \.self) { group in
+                            Button {
+                                selectedGroup = group
+                                withAnimation { drawerPresented = false }
+                            } label: {
+                                HStack { Text(group); Spacer(); if selectedGroup == group { Image(systemName: "checkmark") } }.frame(minHeight: 44)
+                            }.buttonStyle(.plain).accessibilityAddTraits(selectedGroup == group ? .isSelected : [])
+                        }
+                        Text("タグ").font(.headline)
+                        ForEach([""] + Array(Set(availableTags + (selectedTag.isEmpty ? [] : [selectedTag]))).sorted(), id: \.self) { tag in
+                            Button {
+                                selectedTag = tag
+                                withAnimation { drawerPresented = false }
+                            } label: {
+                                HStack { Text(tag.isEmpty ? "すべてのタグ" : tag); Spacer(); if selectedTag == tag { Image(systemName: "checkmark") } }.frame(minHeight: 44)
+                            }.buttonStyle(.plain).accessibilityAddTraits(selectedTag == tag ? .isSelected : [])
+                        }
+                        Divider()
+                        Menu { libraryActions } label: { Label("管理・設定", systemImage: "ellipsis").frame(minHeight: 44) }
+                            .disabled(opening || store.busy)
+                    }
                 }
             }
             .overlay { if opening { ProgressView("資料を開いています").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16)) } }
@@ -254,6 +280,19 @@ struct CloudLibraryView: View {
         let value = store.classification(diagram)
         return (selectedGroup == "すべて" || value.group.rawValue == selectedGroup)
             && (selectedTag.isEmpty || value.tags.contains { $0.localizedCaseInsensitiveCompare(selectedTag) == .orderedSame })
+    }
+    @ViewBuilder private var libraryActions: some View {
+                    Button(showHidden ? "資料一覧に戻る" : "非表示の資料", systemImage: showHidden ? "doc.richtext" : "eye.slash") { showHidden.toggle() }
+                    if kind == .illustrations && !showHidden {
+                        Button("図解をまとめる", systemImage: "rectangle.stack.badge.plus") { collectionDraft = CloudCollection(id: UUID(), title: "", members: []) }
+                    }
+                    Button("登録資料の容量", systemImage: "externaldrive") { showCapacity = true }
+                    if let onSettings { Button("接続設定", systemImage: "gear") { onSettings() } }
+                    if let onReauthenticate { Button("ログインし直す", systemImage: "person.crop.circle.badge.checkmark", action: onReauthenticate) }
+                    if let onLogout { Button("ログアウト", systemImage: "rectangle.portrait.and.arrow.right") { onLogout() } }
+                    Button("一覧を更新", systemImage: "arrow.clockwise") { Task { await refresh() } }
+                    Button("一時キャッシュを削除", systemImage: "trash") { Task { await store.clearCache() } }
+                    Button("端末の資料をすべて削除", systemImage: "trash", role: .destructive) { showClearDocuments = true }
     }
     private var classificationControls: some View {
         VStack(spacing: 8) {

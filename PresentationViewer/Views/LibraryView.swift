@@ -8,6 +8,8 @@ struct LibraryView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var compactTileWidth = 140
     @ScaledMetric(relativeTo: .body) private var regularTileWidth = 180
+    @State private var drawerPresented = false
+    private var phoneUI: Bool { UIDevice.current.userInterfaceIdiom == .phone }
     @State private var showPicker = false
     @State private var document: OpenedDocument?
     @State private var activeAccess: OpenedDocument?
@@ -64,6 +66,7 @@ struct LibraryView: View {
                     }
                     .scrollTargetLayout()
                     .padding(horizontalSizeClass == .regular ? 24 : 16)
+                    .padding(.bottom, phoneUI ? 60 : 0)
                 }
             }
             .scrollPosition(id: $visibleItemID, anchor: .top)
@@ -81,6 +84,22 @@ struct LibraryView: View {
                         .disabled(store.refreshing)
                     Button { showPicker = true } label: { Label("フォルダを追加", systemImage: "folder.badge.plus") }
                         .keyboardShortcut("o", modifiers: .command)
+                }
+            }
+            .toolbar(phoneUI ? .hidden : .visible, for: .navigationBar)
+            .overlay {
+                if phoneUI {
+                    LibraryDrawer(isPresented: $drawerPresented) {
+                        NavigationLink { FolderManagementView(store: store) } label: {
+                            Label("フォルダ管理", systemImage: "folder.badge.gearshape").frame(minHeight: 44)
+                        }
+                        Button { drawerPresented = false; showPicker = true } label: {
+                            Label("フォルダを追加", systemImage: "folder.badge.plus").frame(minHeight: 44)
+                        }
+                        Button { drawerPresented = false; Task { await store.refresh() } } label: {
+                            Label("一覧を更新", systemImage: "arrow.clockwise").frame(minHeight: 44)
+                        }.disabled(store.refreshing)
+                    }
                 }
             }
             .overlay {
@@ -158,8 +177,10 @@ private struct LocalDocumentReader: View {
             pageIndex: index, pageCount: pages.count,
             selectPage: { selected in if pages.indices.contains(selected) { move(to: pages[selected]) } },
             thumbnail: { selected in
-                guard pages.indices.contains(selected), let folder = folders.first(where: { $0.id == pages[selected].folderID }),
-                      let opened = try? await Task.detached(operation: { try FileAccessService.open(pages[selected], in: folder) }).value else { return nil }
+                guard pages.indices.contains(selected) else { return nil }
+                let item = pages[selected]
+                guard let folder = folders.first(where: { $0.id == item.folderID }),
+                      let opened = try? await Task.detached(operation: { try FileAccessService.open(item, in: folder) }).value else { return nil }
                 defer { opened.endAccess() }
                 return UIImage(contentsOfFile: opened.url.path)
             })

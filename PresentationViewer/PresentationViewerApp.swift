@@ -37,6 +37,7 @@ struct PresentationViewerApp: App {
 private struct AppLibraryTabs: View {
     @AppStorage("cloudProduction") private var production = false
     @State private var settings = false
+    @State private var connectionDrawer = false
     @State private var selectedTab = CloudLibraryKind.presentations.rawValue
     @StateObject private var connection = CloudConnectionState()
     @Environment(\.scenePhase) private var scenePhase
@@ -52,9 +53,18 @@ private struct AppLibraryTabs: View {
                     } else { CloudLibraryView(files: files, kind: kind, onSettings: { settings = true }) }
                 case .failure: ContentUnavailableView("保存領域を準備できません", systemImage: "externaldrive.badge.exclamationmark")
                 }
-            }.tag(kind.rawValue).tabItem { Label(kind.title, systemImage: kind == .presentations ? "square.stack" : "rectangle.on.rectangle") }
+            }.toolbar(UIDevice.current.userInterfaceIdiom == .phone ? .hidden : .visible, for: .tabBar).tag(kind.rawValue).tabItem { Label(kind.title, systemImage: kind == .presentations ? "square.stack" : "rectangle.on.rectangle") }
             }
-            LibraryView().tag("local").tabItem { Label("ローカル資料", systemImage: "folder") }
+            LibraryView().toolbar(UIDevice.current.userInterfaceIdiom == .phone ? .hidden : .visible, for: .tabBar).tag("local").tabItem { Label("ローカル資料", systemImage: "folder") }
+        }
+        .toolbar(UIDevice.current.userInterfaceIdiom == .phone ? .hidden : .visible, for: .tabBar)
+        .environment(\.libraryDestination, $selectedTab)
+        .overlay {
+            if UIDevice.current.userInterfaceIdiom == .phone && selectedTab != "local" && (production && connection.auth?.namespace == nil || (try? files.get()) == nil) {
+                LibraryDrawer(isPresented: $connectionDrawer) {
+                    Button("接続設定") { connectionDrawer = false; settings = true }.frame(minHeight: 44)
+                }.environment(\.libraryDestination, $selectedTab)
+            }
         }
         .task { connection.initialize() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { connection.initialize(); connection.auth?.restoreSession() } }
@@ -145,5 +155,88 @@ private struct CloudProductionView: View {
             }
         }
         .alert("認証", isPresented: Binding(get: { auth.message != nil }, set: { if !$0 { auth.message = nil } })) { Button("OK") { auth.message = nil } } message: { Text(auth.message ?? "") }
+    }
+}
+
+private struct LibraryDestinationKey: EnvironmentKey {
+    static let defaultValue: Binding<String> = .constant(CloudLibraryKind.presentations.rawValue)
+}
+extension EnvironmentValues {
+    var libraryDestination: Binding<String> {
+        get { self[LibraryDestinationKey.self] }
+        set { self[LibraryDestinationKey.self] = newValue }
+    }
+}
+
+/// A temporary library drawer; readers use a separate, reserved slide rail.
+struct LibraryDrawer<Content: View>: View {
+    @Binding var isPresented: Bool
+    var filterSummary = ""
+    @Environment(\.libraryDestination) private var destination
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .trailing) {
+                if isPresented {
+                    Button { close() } label: { Color.black.opacity(0.32).ignoresSafeArea() }
+                        .buttonStyle(.plain).accessibilityLabel("メニューを閉じる")
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("ライブラリ").font(.headline)
+                            Spacer()
+                            Button(action: close) { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                                .accessibilityLabel("メニューを閉じる")
+                        }.padding(.horizontal, 16)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(CloudLibraryKind.allCases, id: \.rawValue) { kind in
+                                    destinationButton(kind.title, icon: kind == .presentations ? "square.stack" : "rectangle.on.rectangle", value: kind.rawValue)
+                                }
+                                destinationButton("ローカル資料", icon: "folder", value: "local")
+                                Divider()
+                                content()
+                            }.padding(16)
+                        }
+                    }
+                    .frame(width: min(dynamicTypeSize.isAccessibilitySize ? 380 : 320, geometry.size.width * 0.88))
+                    .background(.regularMaterial)
+                    .transition(.move(edge: .trailing))
+                    .simultaneousGesture(DragGesture().onEnded { if $0.translation.width > 60 && abs($0.translation.height) < 40 { close() } })
+                } else {
+                    Color.clear.frame(width: 16).contentShape(Rectangle())
+                        .gesture(DragGesture().onEnded { if $0.translation.width < -50 { withAnimation { isPresented = true } } })
+                        .accessibilityHidden(true)
+                    VStack { Spacer();
+                        Button { withAnimation { isPresented = true } } label: {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.system(size: 19, weight: .medium))
+                                .frame(width: 48, height: 48)
+                                .background(.regularMaterial, in: Circle())
+                                .overlay(alignment: .topTrailing) {
+                                    if !filterSummary.isEmpty {
+                                        Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(3)
+                                    }
+                                }
+                                .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+                        }.buttonStyle(.plain).accessibilityLabel("ライブラリメニューを開く、\(destinationTitle)\(filterSummary.isEmpty ? "" : "、" + filterSummary)")
+                        .padding(.trailing, 12).padding(.bottom, 8)
+                    }
+                }
+            }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .trailing)
+        }
+    }
+    private var destinationTitle: String {
+        CloudLibraryKind.allCases.first { $0.rawValue == destination.wrappedValue }?.title ?? "ローカル資料"
+    }
+    private func close() { withAnimation { isPresented = false } }
+    private func destinationButton(_ title: String, icon: String, value: String) -> some View {
+        Button { destination.wrappedValue = value; close() } label: {
+            HStack {
+                Label(title, systemImage: icon)
+                Spacer()
+                if destination.wrappedValue == value { Image(systemName: "checkmark") }
+            }.frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityAddTraits(destination.wrappedValue == value ? .isSelected : [])
     }
 }

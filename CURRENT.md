@@ -51,3 +51,17 @@ Phase 11B-3：実Cognito設定・S3公開ブロックを読取確認。本人登
 2026-10-13：iPhone横向き一覧を基本3列に統一し、表紙の余白を縮小。狭幅/アクセシビリティ文字は2列、縦向き/iPadは維持。Windows構造検査合格、iOSビルド/実機更新は未実施。[仕様](docs/landscape-library.md)。
 
 2026-10-13：資料ごとの仕事／私用／その他と自由タグ編集、上部切替・絞り込みを追加。利用者別端末保存、全版共有。Windows構造検査のみ、iOSビルド・XCTest・実機反映は未実施。[仕様・検証](docs/library-classification.md)。
+
+2026-10-14：最新mainのVespera更新・起動成功。LibraryViewの並行処理コンパイルエラーを最小修正。署名build/codesignとSimulator49 XCTest合格。実機操作は未確認。[記録](docs/vespera-install-20261014.md)。
+
+2026-10-14：iPhone一覧の常設分類/タブを左下の引き出しへ集約。プレゼンの一覧と下操作を本文から分離。Simulator49 XCTestとbuild合格、横向きPNGの目視確認。実機反映は未実施。[仕様・検証](docs/library-sidebar.md)。
+
+同UIの実機反映：本人依頼後、Vesperaの署名build/codesign・更新インストール・更新版起動成功。実機の操作感は本人確認待ち。[記録](docs/library-sidebar.md)。
+
+2026-10-14追加改修：一覧入口を右下48pt丸ボタンへ変更し、右から左へパネル展開。資料閲覧のタイトルバーを除去し、資料名/形式/保存/閉じるを右パネルへ配置。最終Simulator/Device build・codesign、横向き目視、Vespera更新インストール成功。[記録](docs/library-sidebar.md)。
+
+追加改修版の実機起動：端末ロック（Locked）で起動要求が拒否された。更新インストールは成功。ロック解除後の起動・操作確認は未完了。
+
+2026-10-14：再生アイコンを除去しPNG/PDFのタップ開始へ変更。下操作行を除去、左上ページ数/右上終了/左右中央前後・横スワイプを実装。両形式のSimulator目視と最終build/codesign合格、Vespera更新インストール成功。[記録](docs/library-sidebar.md)。
+
+タップ開始/左右操作版：Vesperaの更新版起動成功。実機の操作確認は本人確認待ち。
