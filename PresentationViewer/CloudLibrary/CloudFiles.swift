@@ -9,6 +9,20 @@ struct SavedCloudFile: Codable, Identifiable, Sendable {
     func validate() throws { try file.validate(for: diagram) }
 }
 
+enum LibraryGroup: String, Codable, CaseIterable, Sendable {
+    case work = "仕事", personal = "私用", other = "その他"
+}
+
+struct LibraryClassification: Codable, Equatable, Sendable {
+    var group: LibraryGroup = .other
+    var tags: [String] = []
+    static func normalizedTags(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        return tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    }
+}
+
 actor CloudFileStore {
     private let saved: URL
     private let cache: URL
@@ -42,6 +56,18 @@ actor CloudFileStore {
         if hidden { items.append(diagram) }
         try JSONEncoder().encode(items).write(to: saved.appendingPathComponent("hidden-diagrams.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return items
+    }
+    func classifications() throws -> [String: LibraryClassification] {
+        let url = saved.appendingPathComponent("classifications.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        return try JSONDecoder().decode([String: LibraryClassification].self, from: Data(contentsOf: url))
+    }
+    func setClassification(_ diagram: CloudDiagram, value: LibraryClassification) throws -> [String: LibraryClassification] {
+        try diagram.validate()
+        var values = try classifications()
+        values[diagram.id.lowercased()] = LibraryClassification(group: value.group, tags: LibraryClassification.normalizedTags(value.tags))
+        try JSONEncoder().encode(values).write(to: saved.appendingPathComponent("classifications.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return values
     }
     func collections() throws -> [CloudCollection] {
         let url = saved.appendingPathComponent("collections.json")

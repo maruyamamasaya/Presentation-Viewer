@@ -13,9 +13,11 @@ final class ViewerStateTests: XCTestCase {
     }
 
     @MainActor
-    func testOrientationPolicyDefaultsToPortraitAndSupportsPresentation() {
+    func testOrientationPolicySupportsNormalRotationAndPresentation() {
         let delegate = AppOrientationPolicy()
-        defer { AppOrientationPolicy.mask = .portrait }
+        defer { AppOrientationPolicy.mask = .allButUpsideDown }
+        AppOrientationPolicy.mask = .allButUpsideDown
+        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .allButUpsideDown)
         AppOrientationPolicy.mask = .portrait
         XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .portrait)
         AppOrientationPolicy.mask = .landscape

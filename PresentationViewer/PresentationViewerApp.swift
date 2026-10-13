@@ -1,10 +1,35 @@
 import SwiftUI
 
+/// Prefer landscape at launch while keeping normal screens freely rotatable.
+private struct LibraryOrientationAnchor: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> LibraryOrientationController {
+        LibraryOrientationController()
+    }
+
+    func updateUIViewController(_ controller: LibraryOrientationController, context: Context) {}
+}
+
+private final class LibraryOrientationController: UIViewController {
+    private var requestedInitialOrientation = false
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !requestedInitialOrientation, let scene = view.window?.windowScene else { return }
+        requestedInitialOrientation = true
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in
+            // Windowed iPad layouts may keep their current orientation.
+        }
+    }
+}
+
 @main
 struct PresentationViewerApp: App {
     @UIApplicationDelegateAdaptor(AppOrientationPolicy.self) private var appDelegate
     var body: some Scene {
-        WindowGroup { AppLibraryTabs() }
+        WindowGroup {
+            AppLibraryTabs()
+                .background(LibraryOrientationAnchor().frame(width: 0, height: 0))
+        }
     }
 }
 
@@ -91,7 +116,7 @@ private struct CloudConnectionGate: View {
 
 @MainActor
 final class AppOrientationPolicy: NSObject, UIApplicationDelegate {
-    static var mask: UIInterfaceOrientationMask = .portrait
+    static var mask: UIInterfaceOrientationMask = .allButUpsideDown
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.mask
     }

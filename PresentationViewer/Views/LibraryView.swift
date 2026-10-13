@@ -5,6 +5,7 @@ struct LibraryView: View {
     @StateObject private var store = LibraryStore()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var compactTileWidth = 140
     @ScaledMetric(relativeTo: .body) private var regularTileWidth = 180
     @State private var showPicker = false
@@ -20,6 +21,9 @@ struct LibraryView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
+        let landscapePhone = UIDevice.current.userInterfaceIdiom == .phone && geometry.size.width > geometry.size.height
+        let landscapeColumns = dynamicTypeSize.isAccessibilitySize || geometry.size.width < 600 ? 2 : 3
         NavigationStack {
             ScrollView {
                 if store.folders.isEmpty {
@@ -42,11 +46,13 @@ struct LibraryView: View {
                     if visibleDocuments.isEmpty && !store.refreshing {
                         ContentUnavailableView("資料がありません", systemImage: "doc")
                     }
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: gridSpacing) {
+                    LazyVGrid(columns: landscapePhone
+                              ? Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: landscapeColumns)
+                              : columns, alignment: .leading, spacing: landscapePhone ? 12 : gridSpacing) {
                         ForEach(visibleDocuments) { item in
                             if let folder = store.folders.first(where: { $0.id == item.folderID }) {
                                 Button { open(item, in: folder) } label: {
-                                    DocumentTile(item: item, folder: folder)
+                                    DocumentTile(item: item, folder: folder, coverFocused: landscapePhone)
                                 }
                                 .buttonStyle(.plain)
                                 .hoverEffect(.highlight)
@@ -107,6 +113,7 @@ struct LibraryView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await store.refresh() } }
         }
+        }
     }
 
     private func open(_ item: LibraryDocument, in folder: RegisteredFolder) {
@@ -147,7 +154,15 @@ private struct LocalDocumentReader: View {
               let index = pages.firstIndex(where: { $0.url.lastPathComponent == document.url.lastPathComponent }) else { return nil }
         return ImagePageControls(canPrevious: !busy && index > 0, canNext: !busy && index + 1 < pages.count,
             previous: { if index > 0 { move(to: pages[index - 1]) } },
-            next: { if index + 1 < pages.count { move(to: pages[index + 1]) } })
+            next: { if index + 1 < pages.count { move(to: pages[index + 1]) } },
+            pageIndex: index, pageCount: pages.count,
+            selectPage: { selected in if pages.indices.contains(selected) { move(to: pages[selected]) } },
+            thumbnail: { selected in
+                guard pages.indices.contains(selected), let folder = folders.first(where: { $0.id == pages[selected].folderID }),
+                      let opened = try? await Task.detached(operation: { try FileAccessService.open(pages[selected], in: folder) }).value else { return nil }
+                defer { opened.endAccess() }
+                return UIImage(contentsOfFile: opened.url.path)
+            })
     }
     var body: some View {
         DocumentViewer(document: document, imagePages: controls)

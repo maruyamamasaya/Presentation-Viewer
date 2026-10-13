@@ -3,9 +3,11 @@ import PDFKit
 
 @MainActor
 final class CloudLibraryStore: ObservableObject {
+    @Published private(set) var classifications: [String: LibraryClassification] = [:]
     @Published private(set) var collections: [CloudCollection] = []
     @Published private(set) var hiddenDiagrams: [CloudDiagram] = []
     @Published private(set) var items: [CloudDiagram] = []
+    @Published private(set) var localDiagrams: [CloudDiagram] = []
     @Published private(set) var saved: [SavedCloudFile] = []
     @Published private(set) var offline = false
     @Published private(set) var busy = false
@@ -26,8 +28,9 @@ final class CloudLibraryStore: ObservableObject {
         busy = true; defer { busy = false }
         do {
             let append = more && query == listedQuery && scope == listedScope
-            collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams()
+            classifications = try await files.classifications(); collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams()
             saved = try await files.records()
+            localDiagrams = try await files.cachedDiagrams()
             let result = try await api.list(query: query, cursor: append ? nextCursor : nil, scope: scope)
             guard !Task.isCancelled else { return }
             items = append ? items + result.items.filter { new in !items.contains(where: { $0.id == new.id }) } : result.items
@@ -39,12 +42,23 @@ final class CloudLibraryStore: ObservableObject {
             do {
                 items = try await files.cachedDiagrams()
                 saved = try await files.records()
+                localDiagrams = items
                 offline = true; nextCursor = nil
                 if !items.isEmpty || !saved.isEmpty {
                     errorMessage = nil; notice = "端末にある資料を表示しています。接続時に一覧を更新してください。"
                 } else { errorMessage = message(error) }
             } catch { errorMessage = message(error) }
         }
+    }
+    func classification(_ diagram: CloudDiagram) -> LibraryClassification {
+        classifications[diagram.id.lowercased()] ?? LibraryClassification(tags: LibraryClassification.normalizedTags(diagram.tags))
+    }
+    func setClassification(_ diagram: CloudDiagram, value: LibraryClassification) async -> Bool {
+        do {
+            classifications = try await files.setClassification(diagram, value: value)
+            errorMessage = nil
+            return true
+        } catch { errorMessage = message(error); return false }
     }
     func saveCollection(_ collection: CloudCollection) async -> Bool {
         do { collections = try await files.saveCollection(collection); errorMessage = nil; return true }
@@ -99,8 +113,22 @@ final class CloudLibraryStore: ObservableObject {
         }
         throw CloudError.expiredURL
     }
+    func preferredLocalVersion(_ diagram: CloudDiagram) -> CloudDiagram {
+        (localDiagrams + saved.map(\.diagram)).filter {
+            $0.id.lowercased() == diagram.id.lowercased() && $0.version <= diagram.version
+        }.max { $0.version < $1.version } ?? diagram
+    }
+    func availableUpdate(_ diagram: CloudDiagram) -> CloudDiagram? {
+        guard !offline else { return nil }
+        return items.filter { $0.id.lowercased() == diagram.id.lowercased() && $0.version > diagram.version }
+            .max { $0.version < $1.version }
+    }
+    func localReadingFiles(_ diagram: CloudDiagram) async throws -> [CloudFile] {
+        if let detail = try await files.cachedDetail(diagram) { return try await files.localFiles(detail) }
+        return saved.filter { $0.diagram.id.lowercased() == diagram.id.lowercased() && $0.diagram.version == diagram.version }.map(\.file)
+    }
     func reloadSaved() async {
-        do { collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records(); if items.isEmpty { items = try await files.cachedDiagrams(); offline = true } } catch { errorMessage = message(error) }
+        do { classifications = try await files.classifications(); collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records(); localDiagrams = try await files.cachedDiagrams(); if items.isEmpty { items = try await files.cachedDiagrams(); offline = true } } catch { errorMessage = message(error) }
     }
     func detail(_ diagram: CloudDiagram) async throws -> CloudDetail {
         try diagram.validate()
@@ -153,7 +181,7 @@ final class CloudLibraryStore: ObservableObject {
     }
     func clearCache() async {
         guard !busy else { return }
-        do { try await files.clearCache(); if offline { items = [] }; notice = "一時キャッシュを削除しました。保存済み資料は残っています。" }
+        do { try await files.clearCache(); localDiagrams = []; if offline { items = [] }; notice = "一時キャッシュを削除しました。保存済み資料は残っています。" }
         catch { errorMessage = message(error) }
     }
     func clearLocalDocuments() async {
@@ -161,7 +189,7 @@ final class CloudLibraryStore: ObservableObject {
         busy = true; defer { busy = false }
         do {
             try await files.clearLocalDocuments()
-            saved = []; if offline { items = [] }
+            saved = []; localDiagrams = []; if offline { items = [] }
             errorMessage = nil; notice = "端末の資料を削除しました。S3の資料は残っています。"
         } catch { await reloadSaved(); errorMessage = message(error) }
     }
@@ -177,13 +205,19 @@ final class CloudLibraryStore: ObservableObject {
     func isSaved(_ record: SavedCloudFile) -> Bool {
         saved.contains { $0.id == record.id && $0.file == record.file }
     }
+    func cachedSlideThumbnail(_ diagram: CloudDiagram, file: CloudFile) async -> UIImage? {
+        guard let url = try? await files.localURL(SavedCloudFile(diagram: diagram, file: file)) else { return nil }
+        return UIImage(contentsOfFile: url.path)
+    }
+
     func thumbnail(_ diagram: CloudDiagram, offline: Bool) async -> UIImage? {
         do {
             let url: URL
             if offline {
-                let candidates = saved.filter { $0.diagram.id == diagram.id && $0.diagram.version == diagram.version }
-                guard let file = preferredCloudFile(candidates.map(\.file)), let record = candidates.first(where: { $0.file == file }) else { return nil }
-                url = try await files.open(record)
+                let available = try await localReadingFiles(diagram)
+                guard let file = preferredCloudFile(available),
+                      let local = try await files.localURL(SavedCloudFile(diagram: diagram, file: file)) else { return nil }
+                url = local
             } else {
                 let detail = try await detail(diagram)
                 guard let file = detail.files.first(where: { $0.format == .png && $0.page == 1 }) ?? detail.files.first(where: { $0.format == .pdf }) else { return nil }

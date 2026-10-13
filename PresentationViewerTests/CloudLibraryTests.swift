@@ -5,6 +5,76 @@ import UIKit
 
 final class CloudLibraryTests: XCTestCase {
     @MainActor
+    func testClassificationPersistsAcrossRestartCleanupAndVersions() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let diagram = try await MockCloudAPI().list(query: "", cursor: nil).items[0]
+        let store = CloudLibraryStore(api: OfflineAPI(), files: files)
+        XCTAssertEqual(store.classification(diagram).group, .other)
+        let success = await store.setClassification(diagram, value: LibraryClassification(group: .work, tags: [" AWS ", "aws", "設計", ""]))
+        XCTAssertTrue(success)
+        XCTAssertEqual(store.classification(diagram).tags, ["AWS", "設計"])
+        try await files.clearLocalDocuments()
+        let restartedFiles = try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: root.appendingPathComponent("cache"))
+        let restarted = CloudLibraryStore(api: OfflineAPI(), files: restartedFiles)
+        await restarted.reloadSaved()
+        XCTAssertEqual(restarted.classification(diagram).group, .work)
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(diagram)) as? [String: Any])
+        encoded["version"] = diagram.version + 1
+        let newer = try JSONDecoder().decode(CloudDiagram.self, from: JSONSerialization.data(withJSONObject: encoded))
+        XCTAssertEqual(restarted.classification(newer), restarted.classification(diagram))
+        let isolated = try CloudFileStore(saved: root.appendingPathComponent("other-saved"), cache: root.appendingPathComponent("other-cache"))
+        let isolatedValues = try await isolated.classifications()
+        XCTAssertTrue(isolatedValues.isEmpty)
+        let removed = await restarted.setClassification(diagram, value: LibraryClassification(group: .personal, tags: []))
+        XCTAssertTrue(removed)
+        XCTAssertEqual(restarted.classification(diagram).tags, [])
+    }
+
+    @MainActor
+    func testClassificationWriteFailureKeepsPublishedValue() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let diagram = try await MockCloudAPI().list(query: "", cursor: nil).items[0]
+        let store = CloudLibraryStore(api: OfflineAPI(), files: files)
+        let original = store.classification(diagram)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("saved/classifications.json"), withIntermediateDirectories: true)
+        let success = await store.setClassification(diagram, value: LibraryClassification(group: .work, tags: ["new"]))
+        XCTAssertFalse(success)
+        XCTAssertEqual(store.classification(diagram), original)
+        XCTAssertNotNil(store.errorMessage)
+    }
+
+    @MainActor
+    func testUpdateNoticeKeepsLocalCopyUntilExplicitUpdate() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let api = CacheCountingAPI()
+        let store = CloudLibraryStore(api: api, files: files)
+        await store.refresh()
+        let old = try XCTUnwrap(store.items.first)
+        let detail = try await store.detail(old)
+        let file = try XCTUnwrap(preferredCloudFile(detail.files))
+        let first = await store.open(old, file: file, persist: false); XCTAssertNotNil(first)
+        await store.reloadSaved()
+        XCTAssertNil(store.availableUpdate(old))
+        let before = await api.counts()
+        await api.setCatalogVersion(old.version + 1)
+        await store.refresh()
+        let latest = try XCTUnwrap(store.items.first { $0.id == old.id })
+        XCTAssertEqual(store.preferredLocalVersion(latest).version, old.version)
+        XCTAssertEqual(store.availableUpdate(old)?.version, latest.version)
+        let reopened = await store.open(old, file: file, persist: false); XCTAssertNotNil(reopened)
+        let after = await api.counts(); XCTAssertEqual(before, after)
+        let newDetail = try await store.detail(latest)
+        let newFile = try XCTUnwrap(preferredCloudFile(newDetail.files))
+        let updated = await store.open(latest, file: newFile, persist: false); XCTAssertNotNil(updated)
+        await store.reloadSaved()
+        XCTAssertEqual(store.preferredLocalVersion(latest).version, latest.version)
+        XCTAssertNil(store.availableUpdate(latest))
+        let offlineStore = CloudLibraryStore(api: OfflineAPI(), files: files)
+        await offlineStore.refresh()
+        XCTAssertNil(offlineStore.availableUpdate(old))
+    }
+
+    @MainActor
     func testTemporaryCopiesReturnAfterOfflineRestartAndCleanup() async throws {
         let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
         let api = MockCloudAPI()
@@ -544,8 +614,16 @@ final class CloudLibraryKindTests: XCTestCase {
 private actor CacheCountingAPI: CloudLibraryAPI {
     let mock = MockCloudAPI()
     var details = 0, grants = 0, downloads = 0
+    var catalogVersion = 1
+    func setCatalogVersion(_ version: Int) { catalogVersion = version }
     func counts() -> [Int] { [details, grants, downloads] }
-    func list(query: String, cursor: String?) async throws -> CloudList { try await mock.list(query: query, cursor: cursor) }
+    func list(query: String, cursor: String?) async throws -> CloudList {
+        let result = try await mock.list(query: query, cursor: cursor)
+        return CloudList(items: result.items.map {
+            CloudDiagram(id: $0.id, title: $0.title, type: $0.type, version: catalogVersion,
+                         formats: $0.formats, pageCount: $0.pageCount, tags: $0.tags)
+        }, nextCursor: result.nextCursor)
+    }
     func detail(id: String, version: Int) async throws -> CloudDetail {
         details += 1
         let original = try await mock.detail(id: id, version: 1)

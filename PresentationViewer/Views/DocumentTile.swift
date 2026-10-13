@@ -4,6 +4,7 @@ import QuickLookThumbnailing
 struct DocumentTile: View {
     let item: LibraryDocument
     let folder: RegisteredFolder
+    var coverFocused = false
     @State private var thumbnail: UIImage?
 
     var body: some View {
@@ -11,13 +12,13 @@ struct DocumentTile: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .secondarySystemBackground))
                 if let thumbnail {
-                    Image(uiImage: thumbnail).resizable().scaledToFit().padding(8)
+                    Image(uiImage: thumbnail).resizable().scaledToFit().padding(coverFocused ? 0 : 8)
                 } else {
                     Image(systemName: item.format.symbol)
                         .font(.largeTitle).foregroundStyle(.secondary)
                 }
             }
-            .aspectRatio(4 / 3, contentMode: .fit)
+            .aspectRatio(coverFocused ? 16 / 9 : 4 / 3, contentMode: .fit)
             .clipped()
             .accessibilityHidden(true)
             Text(item.name).font(.subheadline).lineLimit(2).truncationMode(.middle)

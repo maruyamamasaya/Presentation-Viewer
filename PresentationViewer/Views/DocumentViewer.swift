@@ -1,5 +1,6 @@
 import SwiftUI
 import QuickLook
+import PDFKit
 
 @MainActor
 struct DocumentViewer: View {
@@ -106,18 +107,37 @@ struct DocumentViewer: View {
                     .accessibilityLabel(startTitle)
                 }
             }
-            .overlay(alignment: .leading) {
-                if hasPages { pageButton(previous: true).padding(.leading, 8) }
-            }
-            .overlay(alignment: .trailing) {
-                if hasPages { pageButton(previous: false).padding(.trailing, 8) }
+            .overlay {
+                if presenting && displayIntent == .presentation {
+                    GeometryReader { geometry in
+                        let safe = geometry.safeAreaInsets
+                        slideSidebar
+                            .frame(width: 64, height: max(44, geometry.size.height - safe.top - safe.bottom - 104))
+                            .position(x: safe.leading + 38, y: safe.top + (geometry.size.height - safe.top - safe.bottom - 104) / 2 + 8)
+                        if hasPages {
+                            pageButton(previous: true)
+                                .position(x: safe.leading + 30, y: geometry.size.height - safe.bottom - 30)
+                            pageButton(previous: false)
+                                .position(x: geometry.size.width - safe.trailing - 30, y: geometry.size.height - safe.bottom - 30)
+                        }
+                        Text("\(currentPage + 1) / \(totalPages)")
+                            .font(.system(size: 12, weight: .medium).monospacedDigit())
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .background(.black.opacity(0.12), in: Capsule())
+                            .position(x: geometry.size.width / 2, y: geometry.size.height - safe.bottom - 26)
+                            .allowsHitTesting(false)
+                    }
+                } else if hasPages {
+                    HStack { pageButton(previous: true); Spacer(); pageButton(previous: false) }.padding(.horizontal, 8)
+                }
             }
             .overlay(alignment: .topTrailing) {
                 if presenting {
                     Button(action: endPresentation) { Image(systemName: "xmark") }
                         .accessibilityLabel(endTitle).keyboardShortcut(.cancelAction)
                         .buttonStyle(PresentationSideButtonStyle())
-                        .foregroundStyle(.white).background(.black.opacity(0.45), in: Capsule())
+                        .foregroundStyle(.white.opacity(0.6)).background(.black.opacity(0.12), in: Capsule())
                         .padding(.trailing, 8).padding(.top, 8)
                 }
             }
@@ -141,12 +161,57 @@ struct DocumentViewer: View {
         } message: {
             Text(orientation.errorMessage ?? "")
         }
-        .onDisappear { external.end(pdfSession); orientation.request(.portrait) }
+        .onDisappear { external.end(pdfSession); orientation.request(.landscape, allowingRotation: true) }
     }
 
     private var hasPages: Bool {
         if externalPageNavigation { return imagePages != nil }
         return presenting && displayIntent == .presentation && (document.format == .pdf || imagePages != nil)
+    }
+
+    private var currentPage: Int { document.format == .pdf ? pdfSession.pageIndex : imagePages?.pageIndex ?? 0 }
+    private var totalPages: Int { document.format == .pdf ? pdfSession.pageCount : imagePages?.pageCount ?? 1 }
+
+    private var slideSidebar: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 6) {
+                    ForEach(0..<totalPages, id: \.self) { index in
+                        Button {
+                            if document.format == .pdf { pdfSession.selectPage(index) }
+                            else { imagePages?.selectPage?(index) }
+                        } label: {
+                            ZStack {
+                                if document.format != .pdf {
+                                    PresentationImageThumbnail(index: index, currentURL: index == currentPage ? document.url : nil, load: imagePages?.thumbnail)
+                                }
+                                if let page = pdfSession.document?.page(at: index) {
+                                    Image(uiImage: page.thumbnail(of: CGSize(width: 112, height: 64), for: .mediaBox))
+                                        .resizable().scaledToFit().opacity(0.28)
+                                }
+                                Text("\(index + 1)").font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.65))
+                                    .shadow(color: .black.opacity(0.6), radius: 1)
+                            }
+                            .frame(width: 56, height: 44)
+                            .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(index == currentPage ? 0.6 : 0.12), lineWidth: index == currentPage ? 1.5 : 0.5))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).id(index)
+                        .disabled(document.format != .pdf && imagePages?.selectPage == nil)
+                        .accessibilityLabel("スライド \(index + 1)")
+                        .accessibilityAddTraits(index == currentPage ? .isSelected : [])
+                    }
+                }.padding(4)
+            }
+            .scrollIndicators(.hidden)
+            .background(.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            .onAppear { proxy.scrollTo(currentPage, anchor: .center) }
+            .onChange(of: currentPage) { _, index in
+                withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(index, anchor: .center) }
+            }
+        }
     }
 
     private func pageButton(previous: Bool) -> some View {
@@ -162,7 +227,7 @@ struct DocumentViewer: View {
             : (previous ? imagePages?.canPrevious != true : imagePages?.canNext != true))
         .font(.system(size: 17, weight: .semibold))
         .buttonStyle(PresentationSideButtonStyle())
-        .foregroundStyle(.white).background(.black.opacity(0.45), in: Capsule())
+        .foregroundStyle(.white.opacity(0.6)).background(.black.opacity(0.12), in: Capsule())
     }
 
     private func toggleControls() {
@@ -191,7 +256,7 @@ struct DocumentViewer: View {
         pdfSession.isPresenting = false
         imagePresenting = false
         toolbarVisible = true
-        orientation.request(.portrait)
+        orientation.request(.landscape, allowingRotation: true)
     }
 }
 
@@ -201,13 +266,13 @@ private final class ViewerOrientationController: ObservableObject {
     weak var viewController: UIViewController?
     @Published var errorMessage: String?
 
-    func request(_ orientations: UIInterfaceOrientationMask) {
+    func request(_ orientations: UIInterfaceOrientationMask, allowingRotation: Bool = false) {
+        AppOrientationPolicy.mask = allowingRotation ? .allButUpsideDown : orientations
         guard let viewController, let scene = viewController.view.window?.windowScene else {
             errorMessage = "画面の準備ができていません。もう一度お試しください。"
             return
         }
         errorMessage = nil
-        AppOrientationPolicy.mask = orientations
         scene.windows.filter { $0.isKeyWindow }.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         viewController.setNeedsUpdateOfSupportedInterfaceOrientations()
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { [weak self] _ in
@@ -240,7 +305,7 @@ struct ViewerErrorView: View {
 private struct PresentationSideButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         // Generous side controls; the full rectangle participates in hit testing.
-        configuration.label.frame(width: 60, height: 56)
+        configuration.label.frame(width: 44, height: 44)
             .contentShape(Rectangle())
             .background(configuration.isPressed ? Color.white.opacity(0.2) : .clear, in: RoundedRectangle(cornerRadius: 16))
     }
@@ -251,6 +316,27 @@ struct ImagePageControls {
     let canNext: Bool
     let previous: () -> Void
     let next: () -> Void
+    var pageIndex: Int = 0
+    var pageCount: Int = 1
+    var selectPage: ((Int) -> Void)? = nil
+    var thumbnail: ((Int) async -> UIImage?)? = nil
+}
+
+private struct PresentationImageThumbnail: View {
+    let index: Int
+    let currentURL: URL?
+    let load: ((Int) async -> UIImage?)?
+    @State private var image: UIImage?
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit().opacity(0.28)
+            }
+        }.task(id: currentURL) {
+            if let currentURL { image = UIImage(contentsOfFile: currentURL.path) }
+            else { image = await load?(index) }
+        }
+    }
 }
 
 /// Library classification determines the action; page count alone does not identify illustrations.
