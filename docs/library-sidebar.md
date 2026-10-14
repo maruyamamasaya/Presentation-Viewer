@@ -29,3 +29,10 @@
 ログ：/private/tmp/slides-navigation-{sim,device,install,launch}.log。
 
 タップ開始/左右操作版：Vesperaの更新版起動成功。実機の操作確認は本人確認待ち。
+
+
+## メニュー縮小・閉じる操作の外出し（2026-10-14 JST）
+
+本人の実機フィードバックで右側のライブラリ/資料メニューを通常320→260pt、アクセシビリティ文字時340ptへ縮小（ウィンドウ幅80%を上限）。資料メニュー内の閉じる項目を除去し、iPhone通常閲覧では左上に48pt以上の「閉じる」を常時表示。プレゼン/一枚図全画面中の右上×はiPhoneでは資料を直接閉じる。iPadの全画面終了動作は維持。
+
+構造検査・git diff --check、既存Teamによる実機Debug build・codesign検証合格。Vesperaへ同Bundle ID更新インストール・更新版起動成功。既存49 XCTestは横向き固定時の結果であり、このUI変更後の再実行はなし。実機の幅/タップ/資料表示、Simulator目視は未検証。ログ：outputs/reader-compact/device-{build,install,launch}.log。

@@ -69,3 +69,5 @@ Phase 11B-3：実Cognito設定・S3公開ブロックを読取確認。本人登
 2026-10-14：iPhoneアプリ全体を左右の横向き専用へ変更。起動/復帰と縦長図解/閲覧終了の方向を統一。[仕様・検証](docs/iphone-landscape-only.md)。
 
 横向き専用版の実機反映：2026-10-14 JST、Vesperaへ署名build/codesign・更新インストール・更新版起動成功。実機操作は本人確認待ち。[記録](docs/iphone-landscape-only.md)。
+
+2026-10-14：右メニュー幅を260ptへ縮小、iPhoneの資料を閉じる操作を外出し。通常閲覧は左上、全画面は右上×で直接閉じる。実機build/codesign・Vespera更新/起動成功。本人操作確認待ち。[記録](docs/library-sidebar.md)。

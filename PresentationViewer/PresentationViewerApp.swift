@@ -232,7 +232,7 @@ struct LibraryDrawer<Content: View>: View {
                             }.padding(16)
                         }
                     }
-                    .frame(width: min(dynamicTypeSize.isAccessibilitySize ? 380 : 320, geometry.size.width * 0.88))
+                    .frame(width: min(dynamicTypeSize.isAccessibilitySize ? 340 : 260, geometry.size.width * 0.80))
                     .background(.regularMaterial)
                     .transition(.move(edge: .trailing))
                     .simultaneousGesture(DragGesture().onEnded { if $0.translation.width > 60 && abs($0.translation.height) < 40 { close() } })

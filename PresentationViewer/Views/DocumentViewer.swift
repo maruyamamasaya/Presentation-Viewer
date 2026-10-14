@@ -13,6 +13,7 @@ struct DocumentViewer: View {
     @ObservedObject private var external = ExternalDisplayCoordinator.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var readerPanelVisible = false
     private var phoneUI: Bool { UIDevice.current.userInterfaceIdiom == .phone }
     @State private var slideRailVisible = true
@@ -62,8 +63,8 @@ struct DocumentViewer: View {
                     })
                 if presenting && displayIntent == .presentation {
                     VStack {
-                        Button(action: endPresentation) { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                            .accessibilityLabel(endTitle).keyboardShortcut(.cancelAction)
+                        Button { if phoneUI { dismiss() } else { endPresentation() } } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                            .accessibilityLabel(phoneUI ? "資料を閉じる" : endTitle).keyboardShortcut(.cancelAction)
                         Spacer(minLength: 0)
                         if hasPages { pageButton(previous: false) }
                         Spacer(minLength: 0)
@@ -120,8 +121,8 @@ struct DocumentViewer: View {
             }
             .overlay(alignment: .topTrailing) {
                 if presenting && displayIntent == .illustration {
-                    Button(action: endPresentation) { Image(systemName: "xmark") }
-                        .accessibilityLabel(endTitle).keyboardShortcut(.cancelAction)
+                    Button { if phoneUI { dismiss() } else { endPresentation() } } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel(phoneUI ? "資料を閉じる" : endTitle).keyboardShortcut(.cancelAction)
                         .buttonStyle(PresentationSideButtonStyle())
                         .foregroundStyle(.white.opacity(0.6)).background(.black.opacity(0.12), in: Capsule())
                         .padding(8)
@@ -152,10 +153,9 @@ struct DocumentViewer: View {
                                                     .frame(minHeight: 44)
                                             }
                                             Button(startTitle) { readerPanelVisible = false; beginPresentation() }.frame(minHeight: 44).disabled(!canPresent)
-                                            Button("資料を閉じる") { dismiss() }.frame(minHeight: 44)
                                         }.padding(16)
                                     }
-                                }.frame(width: min(320, geometry.size.width * 0.88)).background(.regularMaterial)
+                                }.frame(width: min(dynamicTypeSize.isAccessibilitySize ? 340 : 260, geometry.size.width * 0.80)).background(.regularMaterial)
                                     .transition(.move(edge: .trailing))
                                     .simultaneousGesture(DragGesture().onEnded { if $0.translation.width > 60 && abs($0.translation.height) < 40 { withAnimation { readerPanelVisible = false } } })
                             } else {
@@ -170,6 +170,17 @@ struct DocumentViewer: View {
                             }
                         }.frame(width: geometry.size.width, height: geometry.size.height, alignment: .trailing)
                     }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if phoneUI && !presenting {
+                    Button { dismiss() } label: {
+                        Label("閉じる", systemImage: "xmark")
+                            .font(.system(size: 14, weight: .medium))
+                            .padding(.horizontal, 12).frame(minHeight: 48)
+                            .background(.regularMaterial, in: Capsule())
+                    }.buttonStyle(.plain).accessibilityLabel("資料を閉じる")
+                        .keyboardShortcut(.cancelAction).padding(8)
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
