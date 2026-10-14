@@ -86,8 +86,8 @@ def verify():
             if settings.get("PRODUCT_BUNDLE_IDENTIFIER") == "com.example.PresentationViewer":
                 assert settings["TARGETED_DEVICE_FAMILY"] == "1,2"
                 assert settings["INFOPLIST_FILE"] == "PresentationViewer/Info.plist"
-                assert "LandscapeLeft" in settings["INFOPLIST_KEY_UISupportedInterfaceOrientations"]
-                assert "LandscapeRight" in settings["INFOPLIST_KEY_UISupportedInterfaceOrientations"]
+                assert set(settings["INFOPLIST_KEY_UISupportedInterfaceOrientations"].split()) == {
+                    "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"}
     info = plistlib.loads((ROOT / "PresentationViewer/Info.plist").read_bytes())
     assert info["UIRequiresFullScreen"] is False
     assert set(info["UISupportedInterfaceOrientations~ipad"]) == {

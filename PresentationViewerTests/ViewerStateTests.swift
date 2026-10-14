@@ -13,17 +13,17 @@ final class ViewerStateTests: XCTestCase {
     }
 
     @MainActor
-    func testOrientationPolicySupportsNormalRotationAndPresentation() {
+    func testOrientationPolicyKeepsPhoneLandscapeAndPreservesPadChoices() {
         let delegate = AppOrientationPolicy()
         defer { AppOrientationPolicy.mask = .allButUpsideDown }
-        AppOrientationPolicy.mask = .allButUpsideDown
-        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .allButUpsideDown)
-        AppOrientationPolicy.mask = .portrait
-        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .portrait)
-        AppOrientationPolicy.mask = .landscape
-        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .landscape)
-        AppOrientationPolicy.mask = .portrait
-        XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), .portrait)
+        let choices: [UIInterfaceOrientationMask] = [.allButUpsideDown, .portrait, .landscape]
+        for choice in choices {
+            XCTAssertEqual(AppOrientationPolicy.effectiveMask(choice, idiom: .phone), .landscape)
+            XCTAssertEqual(AppOrientationPolicy.effectiveMask(choice, idiom: .pad), choice)
+            AppOrientationPolicy.mask = choice
+            let expected = UIDevice.current.userInterfaceIdiom == .phone ? UIInterfaceOrientationMask.landscape : choice
+            XCTAssertEqual(delegate.application(.shared, supportedInterfaceOrientationsFor: nil), expected)
+        }
     }
 
     @MainActor

@@ -65,3 +65,7 @@ Phase 11B-3：実Cognito設定・S3公開ブロックを読取確認。本人登
 2026-10-14：再生アイコンを除去しPNG/PDFのタップ開始へ変更。下操作行を除去、左上ページ数/右上終了/左右中央前後・横スワイプを実装。両形式のSimulator目視と最終build/codesign合格、Vespera更新インストール成功。[記録](docs/library-sidebar.md)。
 
 タップ開始/左右操作版：Vesperaの更新版起動成功。実機の操作確認は本人確認待ち。
+
+2026-10-14：iPhoneアプリ全体を左右の横向き専用へ変更。起動/復帰と縦長図解/閲覧終了の方向を統一。[仕様・検証](docs/iphone-landscape-only.md)。
+
+横向き専用版の実機反映：2026-10-14 JST、Vesperaへ署名build/codesign・更新インストール・更新版起動成功。実機操作は本人確認待ち。[記録](docs/iphone-landscape-only.md)。

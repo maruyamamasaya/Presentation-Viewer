@@ -320,6 +320,7 @@ private final class ViewerOrientationController: ObservableObject {
     @Published var errorMessage: String?
 
     func request(_ orientations: UIInterfaceOrientationMask, allowingRotation: Bool = false) {
+        let orientations = AppOrientationPolicy.effectiveMask(orientations, idiom: UIDevice.current.userInterfaceIdiom)
         AppOrientationPolicy.mask = allowingRotation ? .allButUpsideDown : orientations
         guard let viewController, let scene = viewController.view.window?.windowScene else {
             errorMessage = "画面の準備ができていません。もう一度お試しください。"

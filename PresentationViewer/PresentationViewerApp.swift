@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Prefer landscape at launch while keeping normal screens freely rotatable.
+/// Keep iPhone landscape-only; preserve the iPad launch preference.
 private struct LibraryOrientationAnchor: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> LibraryOrientationController {
         LibraryOrientationController()
@@ -12,10 +12,35 @@ private struct LibraryOrientationAnchor: UIViewControllerRepresentable {
 private final class LibraryOrientationController: UIViewController {
     private var requestedInitialOrientation = false
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        NotificationCenter.default.addObserver(self, selector: #selector(sceneActivated(_:)),
+            name: UIScene.didActivateNotification, object: nil)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        guard !requestedInitialOrientation, let scene = view.window?.windowScene else { return }
+        requestLandscape()
+    }
+
+    @objc private func sceneActivated(_ notification: Notification) {
+        guard UIDevice.current.userInterfaceIdiom == .phone,
+              let scene = viewIfLoaded?.window?.windowScene,
+              notification.object as? UIWindowScene === scene else { return }
+        requestLandscape()
+    }
+
+    private func requestLandscape() {
+        guard let scene = viewIfLoaded?.window?.windowScene else { return }
+        let phone = UIDevice.current.userInterfaceIdiom == .phone
+        guard phone || !requestedInitialOrientation else { return }
         requestedInitialOrientation = true
+        if phone {
+            scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in
             // Windowed iPad layouts may keep their current orientation.
         }
@@ -126,7 +151,15 @@ private struct CloudConnectionGate: View {
 
 @MainActor
 final class AppOrientationPolicy: NSObject, UIApplicationDelegate {
-    static var mask: UIInterfaceOrientationMask = .allButUpsideDown
+    private static var requestedMask: UIInterfaceOrientationMask = .allButUpsideDown
+    static var mask: UIInterfaceOrientationMask {
+        get { effectiveMask(requestedMask, idiom: UIDevice.current.userInterfaceIdiom) }
+        set { requestedMask = newValue }
+    }
+
+    static func effectiveMask(_ requested: UIInterfaceOrientationMask, idiom: UIUserInterfaceIdiom) -> UIInterfaceOrientationMask {
+        idiom == .phone ? .landscape : requested
+    }
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         Self.mask
     }
