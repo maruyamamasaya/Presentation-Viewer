@@ -41,6 +41,18 @@ actor CloudFileStore {
         }
         return try CloudFileStore(saved: saved, cache: cache)
     }
+    func costHistory() throws -> [StorageCostSnapshot] {
+        let url = saved.appendingPathComponent("storage-cost-history.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        return try JSONDecoder().decode([StorageCostSnapshot].self, from: Data(contentsOf: url))
+    }
+    func recordCost(_ snapshot: StorageCostSnapshot) throws -> [StorageCostSnapshot] {
+        var history = try costHistory()
+        history.append(snapshot)
+        history = Array(history.suffix(365))
+        try JSONEncoder().encode(history).write(to: saved.appendingPathComponent("storage-cost-history.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return history
+    }
     // Shares the user's saved namespace; cache clearing never removes visibility settings.
     func hiddenDiagrams() throws -> [CloudDiagram] {
         let url = saved.appendingPathComponent("hidden-diagrams.json")

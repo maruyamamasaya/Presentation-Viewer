@@ -71,3 +71,11 @@ Phase 11B-3：実Cognito設定・S3公開ブロックを読取確認。本人登
 横向き専用版の実機反映：2026-10-14 JST、Vesperaへ署名build/codesign・更新インストール・更新版起動成功。実機操作は本人確認待ち。[記録](docs/iphone-landscape-only.md)。
 
 2026-10-14：右メニュー幅を260ptへ縮小、iPhoneの資料を閉じる操作を外出し。通常閲覧は左上、全画面は右上×で直接閉じる。実機build/codesign・Vespera更新/起動成功。本人操作確認待ち。[記録](docs/library-sidebar.md)。
+
+2026-10-15：保存料金シミュレーションを追加。既存最新版容量と手入力、単価/為替/税率、利用者別の容量・料金履歴グラフに対応。旧版を含むS3総量の自動取得は未対応。AWS変更なし。[仕様・検証](docs/storage-cost-simulator.md)。
+
+保存料金シミュレーションの実機反映：2026-10-15、既存署名build/codesign・Vespera更新インストール・更新版起動成功。実機の画面操作は未確認。[記録](docs/storage-cost-simulator.md)。
+
+2026-10-15：iOS内の20MB制限で2040年40ページ資料が開けない問題を修正。承認済みID/版/ファイルサイズ/SHA256の原本PDF/PPTXだけ許可し、他資料の制限を維持。53 XCTest（実29.64MB PDFの保存/40ページ/オフライン再表示含む）・実機署名build合格。[仕様・検証](docs/large-presentation-size-fix.md)。
+
+同修正版をVesperaへ更新・起動成功。端末内資料と認証情報を保持。本人の今回資料の表示確認は待機。[記録](docs/large-presentation-size-fix.md)。

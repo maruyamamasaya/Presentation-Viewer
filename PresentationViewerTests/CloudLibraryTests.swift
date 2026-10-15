@@ -4,6 +4,26 @@ import UIKit
 @testable import PresentationViewer
 
 final class CloudLibraryTests: XCTestCase {
+    func testStorageCostEstimate() {
+        XCTAssertEqual(StorageCostEstimate.monthlyYen(gib: 100, usdPerGiB: 0.025, yenPerUSD: 150, taxPercent: 10)!, 412.5, accuracy: 0.00001)
+        XCTAssertEqual(StorageCostEstimate.monthlyYen(gib: 0, usdPerGiB: 0.025, yenPerUSD: 150, taxPercent: 10), 0)
+        for invalid in [-1.0, Double.infinity, Double.nan, 51201] {
+            XCTAssertNil(StorageCostEstimate.monthlyYen(gib: invalid, usdPerGiB: 0.025, yenPerUSD: 150, taxPercent: 10))
+        }
+    }
+    func testCostHistoryPersistsAndIsIsolated() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let sample = StorageCostSnapshot(date: Date(), bytes: 1073741824, monthlyYen: 4.125)
+        _ = try await files.recordCost(sample)
+        try await files.clearLocalDocuments()
+        let reloaded = try await files.costHistory()
+        XCTAssertEqual(reloaded.count, 1)
+        XCTAssertEqual(reloaded.first?.bytes, sample.bytes)
+        let other = try CloudFileStore(saved: root.appendingPathComponent("isolated"), cache: root.appendingPathComponent("isolated-cache"))
+        let empty = try await other.costHistory()
+        XCTAssertTrue(empty.isEmpty)
+    }
+
     @MainActor
     func testClassificationPersistsAcrossRestartCleanupAndVersions() async throws {
         let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
@@ -492,6 +512,41 @@ final class CloudLibraryTests: XCTestCase {
         json["files"] = files
         let decoded = try JSONDecoder().decode(CloudDetail.self, from: JSONSerialization.data(withJSONObject: json))
         try decoded.validate(); XCTAssertEqual(decoded.files.count, detail.files.count)
+    }
+    func testApprovedLargePresentationIsScopedToExactVersionAndBytes() throws {
+        let diagram = CloudDiagram(id: CloudArtifactSizePolicy.diagramID, title: "2040", type: "presentation", version: 1, formats: [.png, .pdf, .pptx], pageCount: 40, tags: [])
+        let pdf = CloudFile(name: "document.pdf", format: .pdf, sizeBytes: 29_640_691, sha256: "eb08beebf657a1582423e48f3602207169828b5ec906c5ce9c9a3a18acbf620a", contentType: CloudFormat.pdf.mime)
+        let pptx = CloudFile(name: "presentation.pptx", format: .pptx, sizeBytes: 20_067_274, sha256: "80e86b33ad702a9642f615e475885a48847288a365469b36778d689211ed870b", contentType: CloudFormat.pptx.mime)
+        for file in [pdf, pptx] {
+            XCTAssertNoThrow(try file.validate(for: diagram))
+            let grant = CloudGrant(url: URL(string: "https://artifacts.example.com/" + file.name)!, method: "GET", expiresAt: "2099-01-01T00:00:00Z", expiresIn: 300, contentType: file.contentType, sizeBytes: file.sizeBytes, sha256: file.sha256, fileName: file.name)
+            XCTAssertNoThrow(try grant.validate(file: file)); XCTAssertTrue(CloudArtifactSizePolicy.allows(grant: grant))
+            for (id, version, pages) in [(UUID().uuidString, 1, 40), (diagram.id, 2, 40), (diagram.id, 1, 39)] {
+                let other = CloudDiagram(id: id, title: diagram.title, type: "presentation", version: version, formats: diagram.formats, pageCount: pages, tags: [])
+                XCTAssertThrowsError(try file.validate(for: other))
+            }
+            for changed in [CloudFile(name: file.name, format: file.format, sizeBytes: file.sizeBytes + 1, sha256: file.sha256, contentType: file.contentType), CloudFile(name: file.name, format: file.format, sizeBytes: file.sizeBytes, sha256: String(repeating: "0", count: 64), contentType: file.contentType)] {
+                XCTAssertThrowsError(try changed.validate(for: diagram))
+                let bad = CloudGrant(url: grant.url, method: "GET", expiresAt: grant.expiresAt, expiresIn: 300, contentType: changed.contentType, sizeBytes: changed.sizeBytes, sha256: changed.sha256, fileName: changed.name)
+                XCTAssertFalse(CloudArtifactSizePolicy.allows(grant: bad))
+            }
+        }
+    }
+    func testApprovedLargePDFCacheSaveAndOfflineReopen() async throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("outputs/large-presentation-fixture/document.pdf")
+        guard FileManager.default.fileExists(atPath: fixture.path) else { throw XCTSkip("Optional real 40-page PDF fixture not installed") }
+        let data = try Data(contentsOf: fixture)
+        let diagram = CloudDiagram(id: CloudArtifactSizePolicy.diagramID, title: "2040", type: "presentation", version: 1, formats: [.png, .pdf, .pptx], pageCount: 40, tags: [])
+        let file = CloudFile(name: "document.pdf", format: .pdf, sizeBytes: 29_640_691, sha256: "eb08beebf657a1582423e48f3602207169828b5ec906c5ce9c9a3a18acbf620a", contentType: CloudFormat.pdf.mime)
+        let record = SavedCloudFile(diagram: diagram, file: file)
+        let (store, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let cached = try await store.cacheData(data, record: record)
+        XCTAssertEqual(PDFDocument(url: cached)?.pageCount, 40)
+        try await store.save(data, record: record); try await store.clearCache()
+        let reopened = try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: root.appendingPathComponent("cache"))
+        let url = try await reopened.open(record)
+        XCTAssertEqual(cloudHash(try Data(contentsOf: url)), file.sha256)
+        XCTAssertEqual(PDFDocument(url: url)?.pageCount, 40)
     }
     func testUnsafeNamesAndHTTPAreRejected() async throws {
         let api = MockCloudAPI(); let item = try await api.list(query: "RAG", cursor: nil).items[0]

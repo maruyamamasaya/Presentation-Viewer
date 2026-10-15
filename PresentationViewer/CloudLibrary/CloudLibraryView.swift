@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 private struct CloudReading: Identifiable {
     let id = UUID()
@@ -31,6 +32,7 @@ struct CloudLibraryView: View {
     @State private var showClearDocuments = false
     @State private var showHidden = false
     @State private var hideCandidate: CloudDiagram?
+    private let costFiles: CloudFileStore
     private let api: any CloudLibraryAPI
     let onSettings: (() -> Void)?
     let onLogout: (() -> Void)?
@@ -38,6 +40,7 @@ struct CloudLibraryView: View {
     let production: Bool
     let kind: CloudLibraryKind
     init(files: CloudFileStore, kind: CloudLibraryKind = .presentations, api: any CloudLibraryAPI = MockCloudAPI(), production: Bool = false, onSettings: (() -> Void)? = nil, onLogout: (() -> Void)? = nil, onReauthenticate: (() -> Void)? = nil) {
+        self.costFiles = files
         self.kind = kind
         self.api = api
         self.production = production; self.onSettings = onSettings; self.onLogout = onLogout
@@ -249,7 +252,7 @@ struct CloudLibraryView: View {
         .sheet(item: $classificationDraft) { diagram in
             LibraryClassificationEditor(diagram: diagram, store: store)
         }
-        .sheet(isPresented: $showCapacity) { CloudCapacityView(api: api, production: production) }
+        .sheet(isPresented: $showCapacity) { CloudCapacityView(api: api, production: production, files: costFiles) }
         .sheet(item: $collectionDraft) { draft in
             CloudCollectionEditor(collection: draft, choices: collectionChoices, store: store)
         }
@@ -286,7 +289,7 @@ struct CloudLibraryView: View {
                     if kind == .illustrations && !showHidden {
                         Button("図解をまとめる", systemImage: "rectangle.stack.badge.plus") { collectionDraft = CloudCollection(id: UUID(), title: "", members: []) }
                     }
-                    Button("登録資料の容量", systemImage: "externaldrive") { showCapacity = true }
+                    Button("保存料金シミュレーション", systemImage: "externaldrive") { showCapacity = true }
                     if let onSettings { Button("接続設定", systemImage: "gear") { onSettings() } }
                     if let onReauthenticate { Button("ログインし直す", systemImage: "person.crop.circle.badge.checkmark", action: onReauthenticate) }
                     if let onLogout { Button("ログアウト", systemImage: "rectangle.portrait.and.arrow.right") { onLogout() } }
@@ -519,49 +522,104 @@ private struct CloudReader: View {
 private struct CloudCapacityView: View {
     let api: any CloudLibraryAPI
     let production: Bool
+    let files: CloudFileStore
     @Environment(\.dismiss) private var dismiss
     @State private var capacity: CloudCapacity?
+    @State private var history: [StorageCostSnapshot] = []
     @State private var loading = false
     @State private var errorMessage: String?
-    @State private var refreshID = 0
+    @State private var historyError: String?
+    @State private var manual = false
+    @State private var gib = 10.0
+    @State private var rate = 0.025
+    @State private var exchange = 150.0
+    @State private var tax = 10.0
+    private var measuredGiB: Double { Double(capacity?.sizeBytes ?? 0) / 1_073_741_824 }
+    private var estimate: Double? {
+        guard manual || capacity != nil else { return nil }
+        return StorageCostEstimate.monthlyYen(gib: manual ? gib : measuredGiB, usdPerGiB: rate, yenPerUSD: exchange, taxPercent: tax)
+    }
+    private func yen(_ amount: Double) -> String { amount.formatted(.currency(code: "JPY").precision(.fractionLength(2))) }
     var body: some View {
         NavigationStack {
             Form {
-                Section(production ? "クラウドの登録資料" : "サンプルの登録資料") {
+                Section(production ? "登録資料の保存費（月額試算）" : "サンプルの保存費（月額試算）") {
+                    if let estimate { Text(yen(estimate) + "／月").font(.title.bold()).accessibilityLabel("月額試算 " + yen(estimate)) }
+                    else { Text("容量を取得するか、有効な条件を入力してください。") }
                     if let capacity {
-                        LabeledContent("登録資料", value: "\(capacity.documentCount)件")
-                        LabeledContent("合計容量", value: ByteCountFormatter.string(fromByteCount: capacity.sizeBytes, countStyle: .decimal))
-                        LabeledContent("最終更新") {
-                            Text(capacity.updatedAt, format: .dateTime.year().month().day().hour().minute())
-                        }
-                    } else if !loading && errorMessage == nil { Text("未取得").foregroundStyle(.secondary) }
+                        LabeledContent("最新版の資料", value: "\(capacity.documentCount)件")
+                        LabeledContent("合計容量", value: ByteCountFormatter.string(fromByteCount: capacity.sizeBytes, countStyle: .binary))
+                        LabeledContent("取得日時") { Text(capacity.updatedAt, format: .dateTime.year().month().day().hour().minute()) }
+                    }
                     if loading { ProgressView("容量を集計しています…") }
-                    if let errorMessage { Text(errorMessage).foregroundStyle(.secondary) }
-                    Button("更新") { refreshID += 1 }.disabled(loading)
+                    if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
+                    Button("容量を更新・履歴に記録") { Task { await refresh() } }.disabled(loading)
+                    Text("全ライブラリの最新版のPDF・PPTX・PNG等を集計。旧版・S3の過去バージョン・管理ファイル・ゴミ箱は対象外。S3全体の請求額ではありません。ファイル本体はダウンロードしません。")
+                    if !production { Text("サンプルです。実際のS3利用量ではありません。") }
                 }
-                Section {
-                    Text("ライブラリ全体の最新版のPDF・PPTX・全ページPNG・SVGを合計します。旧版と管理ファイルは含みません。")
-                    Text("iPhoneへの保存状況や検索条件に関係なく集計します。S3全体の使用容量とは異なります。")
-                    if !production { Text("サンプル資料の集計です。S3の登録資料容量ではありません。") }
+                Section("容量と料金の条件") {
+                    Toggle("容量を手入力する", isOn: $manual)
+                    if manual { numberField("保存容量（GiB）", value: $gib) }
+                    numberField("単価（USD／GiB・月）", value: $rate)
+                    numberField("為替（円／USD）", value: $exchange)
+                    numberField("税率（%）", value: $tax)
+                    Text("東京 S3 Standardの参考値：0.025 USD。為替150円・税10%は仮定です。1 GiB = 1,073,741,824 bytes。容量 × 単価 × 為替 × (1 + 税率 / 100)。50 TiBまでの単一料金帯の試算です。")
+                    Text("過去版・原本・プレビューなどを含む総量が分かる場合は手入力してください。手入力値は取得履歴には記録しません。")
+                    Link("AWS公式の最新料金を確認", destination: URL(string: "https://aws.amazon.com/jp/s3/pricing/")!)
                 }
-            }
-            .navigationTitle("登録資料の容量")
-            .toolbar { Button("閉じる") { dismiss() } }
-            .task(id: refreshID) {
-                loading = true; errorMessage = nil
-                defer { loading = false }
-                do {
-                    let result = try await api.capacity()
-                    try Task.checkCancellation()
-                    capacity = result
-                } catch {
-                    if !Task.isCancelled {
-                        errorMessage = capacity == nil
-                            ? "容量を取得できませんでした。接続を確認して更新してください。"
-                            : "更新できませんでした。前回取得した容量を表示しています。"
+                Section("取得時点の履歴（この端末・最大365回）") {
+                    if let historyError { Text(historyError).foregroundStyle(.red) }
+                    if history.isEmpty { Text("容量更新後に記録します。自動・日次計測ではありません。") }
+                    else {
+                        Chart(history) { item in
+                            LineMark(x: .value("取得日時", item.date), y: .value("容量 GiB", Double(item.bytes) / 1_073_741_824))
+                            PointMark(x: .value("取得日時", item.date), y: .value("容量 GiB", Double(item.bytes) / 1_073_741_824))
+                        }.frame(height: 160).chartYAxisLabel("GiB")
+                        Chart(history) { item in
+                            LineMark(x: .value("取得日時", item.date), y: .value("月額 円", item.monthlyYen))
+                            PointMark(x: .value("取得日時", item.date), y: .value("月額 円", item.monthlyYen))
+                        }.frame(height: 160).chartYAxisLabel("円／月")
+                        Text("料金は各取得時の条件で記録。現在の条件変更で過去の試算は変わりません。")
                     }
                 }
+                Section("含まれない費用") {
+                    Text("ダウンロード通信料・APIリクエスト・認証等の費用、無料枠・クレジット・日割りは反映しません。現在の容量を1か月保持する仮定で、実際の請求や今月の累計ではありません。")
+                }
             }
+            .navigationTitle("保存料金シミュレーション")
+            .toolbar { Button("閉じる") { dismiss() } }
+            .task {
+                do { history = try await files.costHistory() }
+                catch { historyError = "保存済み履歴を読み込めませんでした。" }
+            }
+        }
+    }
+    private func numberField(_ title: String, value: Binding<Double>) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            TextField(title, value: value, format: .number)
+                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                .frame(minWidth: 80, maxWidth: 180)
+        }
+    }
+    @MainActor private func refresh() async {
+        guard !loading else { return }
+        loading = true; errorMessage = nil
+        defer { loading = false }
+        do {
+            let result = try await api.capacity()
+            try Task.checkCancellation()
+            capacity = result
+            guard let cost = StorageCostEstimate.monthlyYen(gib: Double(result.sizeBytes) / 1_073_741_824, usdPerGiB: rate, yenPerUSD: exchange, taxPercent: tax) else {
+                errorMessage = "容量は取得しました。料金条件を修正して再度記録してください。"; return
+            }
+            do {
+                history = try await files.recordCost(StorageCostSnapshot(date: result.updatedAt, bytes: result.sizeBytes, monthlyYen: cost))
+                historyError = nil
+            } catch { historyError = "容量は取得しましたが履歴を保存できませんでした。" }
+        } catch {
+            if !Task.isCancelled { errorMessage = "更新できませんでした。表示中の容量は前回の取得値です。" }
         }
     }
 }

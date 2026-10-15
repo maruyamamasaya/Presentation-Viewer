@@ -156,7 +156,7 @@ struct HTTPSCloudAPI: CloudLibraryAPI {
     func download(_ grant: CloudGrant) async throws -> Data {
         guard grant.url.scheme == "https", let host = grant.url.host, allowedArtifactHosts.contains(host),
               grant.url.user == nil, grant.url.password == nil, grant.url.port == nil || grant.url.port == 443,
-              grant.sizeBytes > 0, grant.sizeBytes < 20_000_000 else { throw CloudError.invalidResponse }
+              CloudArtifactSizePolicy.allows(grant: grant) else { throw CloudError.invalidResponse }
         if cloudDate(grant.expiresAt).map({ $0 <= Date() }) != false { throw CloudError.expiredURL }
         // Never send API Authorization headers to a signed artifact URL.
         let (bytes, response) = try await session.bytes(from: grant.url)
@@ -167,4 +167,19 @@ struct HTTPSCloudAPI: CloudLibraryAPI {
         for try await byte in bytes { if data.count >= grant.sizeBytes { throw CloudError.integrity }; data.append(byte) }
         guard data.count == grant.sizeBytes else { throw CloudError.integrity }; return data
     }
+}
+
+struct StorageCostEstimate {
+    static func monthlyYen(gib: Double, usdPerGiB: Double, yenPerUSD: Double, taxPercent: Double) -> Double? {
+        guard [gib, usdPerGiB, yenPerUSD, taxPercent].allSatisfy({ $0.isFinite && $0 >= 0 }),
+              gib <= 50 * 1024, taxPercent <= 100 else { return nil }
+        let result = gib * usdPerGiB * yenPerUSD * (1 + taxPercent / 100)
+        return result.isFinite ? result : nil
+    }
+}
+struct StorageCostSnapshot: Codable, Identifiable, Sendable {
+    var id: Date { date }
+    let date: Date
+    let bytes: Int64
+    let monthlyYen: Double
 }
