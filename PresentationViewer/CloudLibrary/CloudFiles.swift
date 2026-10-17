@@ -37,8 +37,50 @@ actor CloudFileStore {
     }
     func syncLabDirectory() -> URL { saved.appendingPathComponent("sync-lab") }
     func testLibrarySyncDirectory() -> URL { saved.appendingPathComponent("test-library-sync") }
+    private let managementNames = ["organization.json", "classifications.json", "collections.json"]
+    private var managementRestoreJournal: URL { saved.appendingPathComponent("management-restore.json") }
+    private func validateManagementBackup(_ data: Data) throws -> [String: Data] {
+        let values = try JSONDecoder().decode([String: Data].self, from: data)
+        guard Set(values.keys).isSubset(of: Set(managementNames)) else { throw CloudError.invalidResponse }
+        if let data = values["organization.json"] { _ = try OrganizationState<CloudDiagram>.load(data) }
+        if let data = values["classifications.json"] { _ = try JSONDecoder().decode([String: LibraryClassification].self, from: data) }
+        if let data = values["collections.json"] {
+            let collections = try JSONDecoder().decode([CloudCollection].self, from: data)
+            for collection in collections { try collection.validate() }
+        }
+        return values
+    }
+    private func recoverManagementRestore() throws {
+        guard FileManager.default.fileExists(atPath: managementRestoreJournal.path) else { return }
+        let values = try validateManagementBackup(Data(contentsOf: managementRestoreJournal))
+        for name in managementNames {
+            let file = saved.appendingPathComponent(name)
+            if let data = values[name] { try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
+            else if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        }
+        // Never replay pre-restore incoming state on the restored management files.
+        if FileManager.default.fileExists(atPath: syncJournal.path) { try FileManager.default.removeItem(at: syncJournal) }
+        try FileManager.default.removeItem(at: managementRestoreJournal)
+    }
+    func managementBackup() throws -> Data {
+        try recoverSyncApply()
+        var values: [String: Data] = [:]
+        for name in managementNames {
+            let file = saved.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: file.path) { values[name] = try Data(contentsOf: file) }
+        }
+        let data = try JSONEncoder().encode(values)
+        _ = try validateManagementBackup(data)
+        return data
+    }
+    func restoreManagementBackup(_ data: Data) throws {
+        _ = try validateManagementBackup(data)
+        try data.write(to: managementRestoreJournal, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try recoverManagementRestore()
+    }
     private var syncJournal: URL { saved.appendingPathComponent("test-sync-apply.json") }
     private func recoverSyncApply() throws {
+        try recoverManagementRestore()
         guard FileManager.default.fileExists(atPath: syncJournal.path) else { return }
         let state = try JSONDecoder().decode(OrganizationState<CloudDiagram>.self, from: Data(contentsOf: syncJournal))
         for collection in state.collections { try collection.validate() }
@@ -53,15 +95,6 @@ actor CloudFileStore {
     func applyTestLibrarySync(_ state: OrganizationState<CloudDiagram>) throws {
         try recoverSyncApply()
         for collection in state.collections { try collection.validate() }
-        let backup = saved.appendingPathComponent("before-test-sync.json")
-        if !FileManager.default.fileExists(atPath: backup.path) {
-            var originals: [String: Data] = [:]
-            for name in ["organization.json", "classifications.json", "collections.json"] {
-                let url = saved.appendingPathComponent(name)
-                if FileManager.default.fileExists(atPath: url.path) { originals[name] = try Data(contentsOf: url) }
-            }
-            try JSONEncoder().encode(originals).write(to: backup, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        }
         var next = state
         let icons = Dictionary(uniqueKeysWithValues: try organization().folders.map { ($0.id, $0.iconFile) })
         next.folders = next.folders.map { folder in var folder = folder; folder.iconFile = icons[folder.id] ?? nil; return folder }

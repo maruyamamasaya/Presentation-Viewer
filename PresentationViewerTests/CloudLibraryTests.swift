@@ -894,7 +894,7 @@ extension CloudLibraryTests {
         XCTAssertEqual(restored.organization.folders.first?.name, "受信したフォルダ")
         XCTAssertEqual(restored.classifications, store.classifications)
         XCTAssertEqual(restored.collections, store.collections)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/before-test-sync.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/test-library-sync/recovery.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/test-sync-apply.json").path))
     }
     func testInterruptedLibraryApplyRecoversBeforeReading() async throws {
@@ -908,5 +908,48 @@ extension CloudLibraryTests {
         XCTAssertEqual(recovered.folders, state.folders)
         XCTAssertEqual(classifications, state.classifications)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/test-sync-apply.json").path))
+    }
+}
+
+
+extension CloudLibraryTests {
+    @MainActor func testManagementOnlyBackupRestoresExactFilesAndStopsSync() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: MockCloudAPI(), files: files, enableTestSync: true)
+        await store.refresh()
+        let created = await store.createFolder("元フォルダ"); XCTAssertTrue(created)
+        let diagram = try XCTUnwrap(store.items.first)
+        let tagged = await store.setClassification(diagram, value: LibraryClassification(group: .work, tags: ["元タグ"])); XCTAssertTrue(tagged)
+        let saved = root.appendingPathComponent("saved")
+        let before = try ["organization.json", "classifications.json"].map { try Data(contentsOf: saved.appendingPathComponent($0)) }
+        let body = saved.appendingPathComponent("untouched.pdf")
+        let bodyBytes = Data("BODY-MUST-NOT-BE-BACKED-UP".utf8); try bodyBytes.write(to: body)
+        let session = await store.makeSyncLab()
+        await session.prepare(endpoint: "http://127.0.0.1:1", libraryID: UUID().uuidString)
+        XCTAssertNotNil(session.backupDate)
+        let changed = await store.createFolder("後の変更"); XCTAssertTrue(changed)
+        await session.restoreBackup()
+        XCTAssertFalse(session.connected)
+        XCTAssertEqual(store.organization.folders.map(\.name), ["元フォルダ"])
+        XCTAssertEqual(try ["organization.json", "classifications.json"].map { try Data(contentsOf: saved.appendingPathComponent($0)) }, before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: saved.appendingPathComponent("collections.json").path))
+        XCTAssertEqual(try Data(contentsOf: body), bodyBytes)
+        let recovery = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: saved.appendingPathComponent("test-library-sync/recovery.json"))) as? [String: Any])
+        let payload = try XCTUnwrap(Data(base64Encoded: recovery["payload"] as? String ?? ""))
+        let contents = try JSONDecoder().decode([String: Data].self, from: payload)
+        XCTAssertEqual(Set(contents.keys), Set(["organization.json", "classifications.json"]))
+    }
+    func testInterruptedManagementRestoreWinsOverPendingSyncApply() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        _ = try await files.createFolder(name: "復元対象")
+        let original = try await files.managementBackup()
+        _ = try await files.createFolder(name: "戻す変更")
+        var incoming = OrganizationState<CloudDiagram>(); incoming.folders = [OrganizationFolder(name: "再適用してはいけない受信")]
+        try JSONEncoder().encode(incoming).write(to: root.appendingPathComponent("saved/test-sync-apply.json"))
+        try original.write(to: root.appendingPathComponent("saved/management-restore.json"))
+        let restored = try await files.organization()
+        XCTAssertEqual(restored.folders.map(\.name), ["復元対象"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/test-sync-apply.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/management-restore.json").path))
     }
 }

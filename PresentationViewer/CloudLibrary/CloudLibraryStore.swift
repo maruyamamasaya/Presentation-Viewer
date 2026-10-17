@@ -90,6 +90,13 @@ final class CloudLibraryStore: ObservableObject {
                 let value = try JSONDecoder().decode(OrganizationState<CloudDiagram>.self, from: JSONEncoder().encode(state))
                 try await self.files.applyTestLibrarySync(value)
                 self.organization = try await self.files.organization(); self.classifications = try await self.files.classifications(); self.collections = try await self.files.collections()
+            }, backup: { [weak self] in
+                guard let self else { throw CancellationError() }
+                return try await self.files.managementBackup()
+            }, restore: { [weak self] data in
+                guard let self else { throw CancellationError() }
+                try await self.files.restoreManagementBackup(data)
+                self.organization = try await self.files.organization(); self.classifications = try await self.files.classifications(); self.collections = try await self.files.collections()
             })
             let seed = (try? await binding.read()) ?? OrganizationState<OrganizationDocument>()
             let documents = items.map { OrganizationDocument(id: $0.id, title: $0.title, type: $0.type, version: $0.version, formats: $0.formats.map(\.rawValue), pageCount: $0.pageCount, tags: $0.tags) }
@@ -109,19 +116,19 @@ final class CloudLibraryStore: ObservableObject {
         return SyncLabSession(directory: await files.syncLabDirectory(), seed: seed, documents: documents)
     }
     func createFolder(_ name: String, parentID: UUID? = nil) async -> Bool {
-        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        guard testSync?.blocksLibraryEdits != true else { errorMessage = "同期の確認・復元処理中です。同期画面で完了または解除してから編集してください。"; return false }
         do { organization = try await files.createFolder(name: name, parentID: parentID); await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func moveDocuments(_ ids: Set<String>, to folderID: UUID?) async -> Bool {
-        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        guard testSync?.blocksLibraryEdits != true else { errorMessage = "同期の確認・復元処理中です。同期画面で完了または解除してから編集してください。"; return false }
         let known = Set((items + localDiagrams + saved.map(\.diagram) + collections.flatMap(\.members)).map { $0.id.lowercased() })
         guard !ids.isEmpty, Set(ids.map { $0.lowercased() }).isSubset(of: known) else { errorMessage = CloudError.invalidResponse.errorDescription; return false }
         do { organization = try await files.moveDocuments(ids, to: folderID); await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func removeFolder(_ id: UUID) async -> Bool {
-        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        guard testSync?.blocksLibraryEdits != true else { errorMessage = "同期の確認・復元処理中です。同期画面で完了または解除してから編集してください。"; return false }
         do { organization = try await files.removeOrganizationFolder(id); await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
@@ -136,7 +143,7 @@ final class CloudLibraryStore: ObservableObject {
         classifications[diagram.id.lowercased()] ?? LibraryClassification(tags: LibraryClassification.normalizedTags(diagram.tags))
     }
     func setClassification(_ diagram: CloudDiagram, value: LibraryClassification) async -> Bool {
-        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        guard testSync?.blocksLibraryEdits != true else { errorMessage = "同期の確認・復元処理中です。同期画面で完了または解除してから編集してください。"; return false }
         do {
             classifications = try await files.setClassification(diagram, value: value)
             await testSync?.captureLibraryChanges()
@@ -145,12 +152,12 @@ final class CloudLibraryStore: ObservableObject {
         } catch { errorMessage = message(error); return false }
     }
     func saveCollection(_ collection: CloudCollection) async -> Bool {
-        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        guard testSync?.blocksLibraryEdits != true else { errorMessage = "同期の確認・復元処理中です。同期画面で完了または解除してから編集してください。"; return false }
         do { collections = try await files.saveCollection(collection); errorMessage = nil; await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func removeCollection(_ id: UUID) async -> Bool {
-        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        guard testSync?.blocksLibraryEdits != true else { errorMessage = "同期の確認・復元処理中です。同期画面で完了または解除してから編集してください。"; return false }
         do { collections = try await files.removeCollection(id); errorMessage = nil; await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
