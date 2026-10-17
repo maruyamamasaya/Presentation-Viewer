@@ -53,7 +53,12 @@ struct CloudLibraryView: View {
         self.api = api
         self.production = production; self.onSettings = onSettings; self.onLogout = onLogout
         self.onReauthenticate = onReauthenticate
-        _store = StateObject(wrappedValue: CloudLibraryStore(api: api, files: files))
+        #if targetEnvironment(simulator)
+        let testSync = !production && ProcessInfo.processInfo.arguments.contains("--test-library-sync")
+        #else
+        let testSync = false
+        #endif
+        _store = StateObject(wrappedValue: CloudLibraryStore(api: api, files: files, enableTestSync: testSync))
     }
     private var savedDiagrams: [CloudDiagram] {
         var seen = Set<String>()

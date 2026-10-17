@@ -24,7 +24,9 @@ final class CloudLibraryStore: ObservableObject {
     private let api: any CloudLibraryAPI
     private var pendingDetails: [String: Task<CloudDetail, Error>] = [:]
     private let files: CloudFileStore
-    init(api: any CloudLibraryAPI = MockCloudAPI(), files: CloudFileStore) { self.api = api; self.files = files }
+    private let enableTestSync: Bool
+    private var testSync: SyncLabSession?
+    init(api: any CloudLibraryAPI = MockCloudAPI(), files: CloudFileStore, enableTestSync: Bool = false) { self.api = api; self.files = files; self.enableTestSync = enableTestSync }
     func loadNextPage(cursor: String) async {
         while refreshing {
             do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
@@ -77,6 +79,23 @@ final class CloudLibraryStore: ObservableObject {
         }
     }
     func makeSyncLab() async -> SyncLabSession {
+        if enableTestSync {
+            if let testSync { return testSync }
+            let binding = TestLibrarySyncBinding(read: { [weak self] in
+                guard let self else { throw CancellationError() }
+                let value = try await self.files.testLibrarySyncSource()
+                return try JSONDecoder().decode(OrganizationState<OrganizationDocument>.self, from: JSONEncoder().encode(value))
+            }, apply: { [weak self] state in
+                guard let self else { throw CancellationError() }
+                let value = try JSONDecoder().decode(OrganizationState<CloudDiagram>.self, from: JSONEncoder().encode(state))
+                try await self.files.applyTestLibrarySync(value)
+                self.organization = try await self.files.organization(); self.classifications = try await self.files.classifications(); self.collections = try await self.files.collections()
+            })
+            let seed = (try? await binding.read()) ?? OrganizationState<OrganizationDocument>()
+            let documents = items.map { OrganizationDocument(id: $0.id, title: $0.title, type: $0.type, version: $0.version, formats: $0.formats.map(\.rawValue), pageCount: $0.pageCount, tags: $0.tags) }
+            let session = SyncLabSession(directory: await files.testLibrarySyncDirectory(), seed: seed, documents: documents, binding: binding)
+            testSync = session; return session
+        }
         await reloadSaved()
         func document(_ member: CloudDiagram) -> OrganizationDocument {
             OrganizationDocument(id: member.id, title: member.title, type: member.type, version: member.version, formats: member.formats.map(\.rawValue), pageCount: member.pageCount, tags: member.tags)
@@ -90,17 +109,20 @@ final class CloudLibraryStore: ObservableObject {
         return SyncLabSession(directory: await files.syncLabDirectory(), seed: seed, documents: documents)
     }
     func createFolder(_ name: String, parentID: UUID? = nil) async -> Bool {
-        do { organization = try await files.createFolder(name: name, parentID: parentID); return true }
+        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        do { organization = try await files.createFolder(name: name, parentID: parentID); await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func moveDocuments(_ ids: Set<String>, to folderID: UUID?) async -> Bool {
+        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
         let known = Set((items + localDiagrams + saved.map(\.diagram) + collections.flatMap(\.members)).map { $0.id.lowercased() })
         guard !ids.isEmpty, Set(ids.map { $0.lowercased() }).isSubset(of: known) else { errorMessage = CloudError.invalidResponse.errorDescription; return false }
-        do { organization = try await files.moveDocuments(ids, to: folderID); return true }
+        do { organization = try await files.moveDocuments(ids, to: folderID); await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func removeFolder(_ id: UUID) async -> Bool {
-        do { organization = try await files.removeOrganizationFolder(id); return true }
+        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        do { organization = try await files.removeOrganizationFolder(id); await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func folderPath(_ id: UUID) -> String {
@@ -114,18 +136,22 @@ final class CloudLibraryStore: ObservableObject {
         classifications[diagram.id.lowercased()] ?? LibraryClassification(tags: LibraryClassification.normalizedTags(diagram.tags))
     }
     func setClassification(_ diagram: CloudDiagram, value: LibraryClassification) async -> Bool {
+        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
         do {
             classifications = try await files.setClassification(diagram, value: value)
+            await testSync?.captureLibraryChanges()
             errorMessage = nil
             return true
         } catch { errorMessage = message(error); return false }
     }
     func saveCollection(_ collection: CloudCollection) async -> Bool {
-        do { collections = try await files.saveCollection(collection); errorMessage = nil; return true }
+        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        do { collections = try await files.saveCollection(collection); errorMessage = nil; await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func removeCollection(_ id: UUID) async -> Bool {
-        do { collections = try await files.removeCollection(id); errorMessage = nil; return true }
+        guard testSync?.busy != true else { errorMessage = "同期処理中です。完了後に編集してください。"; return false }
+        do { collections = try await files.removeCollection(id); errorMessage = nil; await testSync?.captureLibraryChanges(); return true }
         catch { errorMessage = message(error); return false }
     }
     func members(of collection: CloudCollection) -> [CloudDiagram] {

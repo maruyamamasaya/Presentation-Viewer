@@ -36,7 +36,40 @@ actor CloudFileStore {
         return try CloudFileStore(saved: saved, cache: cache)
     }
     func syncLabDirectory() -> URL { saved.appendingPathComponent("sync-lab") }
+    func testLibrarySyncDirectory() -> URL { saved.appendingPathComponent("test-library-sync") }
+    private var syncJournal: URL { saved.appendingPathComponent("test-sync-apply.json") }
+    private func recoverSyncApply() throws {
+        guard FileManager.default.fileExists(atPath: syncJournal.path) else { return }
+        let state = try JSONDecoder().decode(OrganizationState<CloudDiagram>.self, from: Data(contentsOf: syncJournal))
+        for collection in state.collections { try collection.validate() }
+        try writeOrganization(state)
+        try JSONEncoder().encode(state.classifications).write(to: saved.appendingPathComponent("classifications.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try writeCollections(state.collections)
+        try FileManager.default.removeItem(at: syncJournal)
+    }
+    func testLibrarySyncSource() throws -> OrganizationState<CloudDiagram> {
+        var state = try organization(); state.classifications = try classifications(); state.collections = try collections(); return state
+    }
+    func applyTestLibrarySync(_ state: OrganizationState<CloudDiagram>) throws {
+        try recoverSyncApply()
+        for collection in state.collections { try collection.validate() }
+        let backup = saved.appendingPathComponent("before-test-sync.json")
+        if !FileManager.default.fileExists(atPath: backup.path) {
+            var originals: [String: Data] = [:]
+            for name in ["organization.json", "classifications.json", "collections.json"] {
+                let url = saved.appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: url.path) { originals[name] = try Data(contentsOf: url) }
+            }
+            try JSONEncoder().encode(originals).write(to: backup, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+        var next = state
+        let icons = Dictionary(uniqueKeysWithValues: try organization().folders.map { ($0.id, $0.iconFile) })
+        next.folders = next.folders.map { folder in var folder = folder; folder.iconFile = icons[folder.id] ?? nil; return folder }
+        try JSONEncoder().encode(next).write(to: syncJournal, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try recoverSyncApply()
+    }
     func organization() throws -> OrganizationState<CloudDiagram> {
+        try recoverSyncApply()
         let url = saved.appendingPathComponent("organization.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return OrganizationState() }
         return try OrganizationState.load(Data(contentsOf: url))
@@ -90,6 +123,7 @@ actor CloudFileStore {
         return items
     }
     func classifications() throws -> [String: LibraryClassification] {
+        try recoverSyncApply()
         let url = saved.appendingPathComponent("classifications.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
         return try JSONDecoder().decode([String: LibraryClassification].self, from: Data(contentsOf: url))
@@ -102,6 +136,7 @@ actor CloudFileStore {
         return values
     }
     func collections() throws -> [CloudCollection] {
+        try recoverSyncApply()
         let url = saved.appendingPathComponent("collections.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let values = try JSONDecoder().decode([CloudCollection].self, from: Data(contentsOf: url))

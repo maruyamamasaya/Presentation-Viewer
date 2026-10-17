@@ -1,6 +1,7 @@
 import XCTest
 import PDFKit
 import UIKit
+import LibraryOrganization
 @testable import PresentationViewer
 
 final class CloudLibraryTests: XCTestCase {
@@ -851,4 +852,61 @@ private actor PagingAPI: CloudLibraryAPI {
     func detail(id: String, version: Int) async throws -> CloudDetail { throw CloudError.unavailable }
     func access(diagram: CloudDiagram, file: CloudFile) async throws -> CloudGrant { throw CloudError.unavailable }
     func download(_ grant: CloudGrant) async throws -> Data { throw CloudError.unavailable }
+}
+
+
+extension CloudLibraryTests {
+    @MainActor func testOrdinaryLibraryEditsSyncAndReceivedMetadataAppears() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: MockCloudAPI(), files: files, enableTestSync: true)
+        await store.refresh()
+        let diagram = try XCTUnwrap(store.items.first { CloudLibraryKind.illustrations.contains($0) && $0.formats.contains(.pdf) })
+        let library = UUID()
+        let directory = await files.testLibrarySyncDirectory()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let payload: [String: Any] = ["schemaVersion": 1, "endpoint": "http://127.0.0.1:1", "client": try JSONSerialization.jsonObject(with: JSONEncoder().encode(OrganizationSyncClient<OrganizationDocument>(libraryID: library))), "imported": true, "observed": [:], "bound": true]
+        try JSONSerialization.data(withJSONObject: payload).write(to: directory.appendingPathComponent("checkpoint.json"))
+        let session = await store.makeSyncLab()
+        let created = await store.createFolder("通常画面のフォルダ"); XCTAssertTrue(created)
+        let folder = try XCTUnwrap(store.organization.folders.first)
+        let moved = await store.moveDocuments([diagram.id], to: folder.id); XCTAssertTrue(moved)
+        let classified = await store.setClassification(diagram, value: LibraryClassification(group: .work, tags: ["通常タグ"])); XCTAssertTrue(classified)
+        let collected = await store.saveCollection(CloudCollection(id: UUID(), title: "通常まとめ", members: [diagram])); XCTAssertTrue(collected)
+        XCTAssertGreaterThan(session.pendingCount, 0)
+        let server = LocalOrganizationSyncServer<OrganizationDocument>(libraryID: library, memberID: { $0.id })
+        await session.synchronize(with: server)
+        XCTAssertEqual(session.pendingCount, 0)
+        var peer = OrganizationSyncClient<OrganizationDocument>(libraryID: library)
+        try await peer.synchronize(with: server)
+        var renamed = folder; renamed.name = "受信したフォルダ"
+        peer.edit(key: OrganizationSyncKey.folder(folder.id), value: .folder(renamed))
+        peer.edit(key: OrganizationSyncKey.group(diagram.id), value: .group(.personal))
+        peer.edit(key: OrganizationSyncKey.tag(diagram.id, "受信タグ"), value: .tag("受信タグ"))
+        try await peer.synchronize(with: server)
+        await session.synchronize(with: server)
+        XCTAssertEqual(store.organization.folders.first?.name, "受信したフォルダ")
+        XCTAssertEqual(store.organization.assignments[diagram.id.lowercased()], folder.id)
+        XCTAssertEqual(store.classification(diagram).group, .personal)
+        XCTAssertEqual(Set(store.classification(diagram).tags), Set(["通常タグ", "受信タグ"]))
+        XCTAssertEqual(store.collections.first?.title, "通常まとめ")
+        let restored = CloudLibraryStore(api: MockCloudAPI(), files: files)
+        await restored.refresh()
+        XCTAssertEqual(restored.organization.folders.first?.name, "受信したフォルダ")
+        XCTAssertEqual(restored.classifications, store.classifications)
+        XCTAssertEqual(restored.collections, store.collections)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/before-test-sync.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/test-sync-apply.json").path))
+    }
+    func testInterruptedLibraryApplyRecoversBeforeReading() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        var state = OrganizationState<CloudDiagram>()
+        state.folders = [OrganizationFolder(name: "中断した受信反映")]
+        state.classifications[UUID().uuidString.lowercased()] = LibraryClassification(group: .work, tags: ["保持"])
+        try JSONEncoder().encode(state).write(to: root.appendingPathComponent("saved/test-sync-apply.json"))
+        let recovered = try await files.organization()
+        let classifications = try await files.classifications()
+        XCTAssertEqual(recovered.folders, state.folders)
+        XCTAssertEqual(classifications, state.classifications)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/test-sync-apply.json").path))
+    }
 }
