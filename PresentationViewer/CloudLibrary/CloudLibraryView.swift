@@ -1,5 +1,6 @@
 import SwiftUI
 import LibraryOrganizationUI
+import LibraryOrganization
 import Charts
 
 private struct CloudReading: Identifiable {
@@ -47,7 +48,7 @@ struct CloudLibraryView: View {
     let onReauthenticate: (() -> Void)?
     let production: Bool
     let kind: CloudLibraryKind
-    init(files: CloudFileStore, kind: CloudLibraryKind = .presentations, api: any CloudLibraryAPI = MockCloudAPI(), production: Bool = false, onSettings: (() -> Void)? = nil, onLogout: (() -> Void)? = nil, onReauthenticate: (() -> Void)? = nil) {
+    init(files: CloudFileStore, kind: CloudLibraryKind = .presentations, api: any CloudLibraryAPI = MockCloudAPI(), production: Bool = false, onSettings: (() -> Void)? = nil, onLogout: (() -> Void)? = nil, onReauthenticate: (() -> Void)? = nil, syncConnection: AuthenticatedSyncConnection? = nil) {
         self.costFiles = files
         self.kind = kind
         self.api = api
@@ -58,7 +59,7 @@ struct CloudLibraryView: View {
         #else
         let testSync = false
         #endif
-        _store = StateObject(wrappedValue: CloudLibraryStore(api: api, files: files, enableTestSync: testSync))
+        _store = StateObject(wrappedValue: CloudLibraryStore(api: api, files: files, enableTestSync: testSync, syncConnection: syncConnection))
     }
     private var savedDiagrams: [CloudDiagram] {
         var seen = Set<String>()

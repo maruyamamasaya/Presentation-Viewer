@@ -3,6 +3,7 @@ import SwiftUI
 import AuthenticationServices
 import Security
 import CryptoKit
+import LibraryOrganization
 
 struct CloudConnection: Codable, Sendable {
     let issuer: URL
@@ -107,12 +108,12 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first(where: \.isKeyWindow) ?? ASPresentationAnchor()
     }
-    func login() async {
+    func login(organizationSync: Bool = false) async {
         guard !working else { return }; working = true; defer { working = false }
         do {
             let verifier = try oidcRandom(), state = try oidcRandom()
             var url = URLComponents(url: config.domain.appendingPathComponent("oauth2/authorize"), resolvingAgainstBaseURL: false)!
-            url.queryItems = [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "client_id", value: config.clientID), URLQueryItem(name: "redirect_uri", value: config.redirect), URLQueryItem(name: "scope", value: "openid diagram-library/read"), URLQueryItem(name: "state", value: state), URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "code_challenge", value: oidcChallenge(verifier))]
+            url.queryItems = [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "client_id", value: config.clientID), URLQueryItem(name: "redirect_uri", value: config.redirect), URLQueryItem(name: "scope", value: organizationSync ? "openid diagram-library/read diagram-library/organization.sync" : "openid diagram-library/read"), URLQueryItem(name: "state", value: state), URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "code_challenge", value: oidcChallenge(verifier))]
             let callback: URL = try await withCheckedThrowingContinuation { continuation in
                 browser = ASWebAuthenticationSession(url: url.url!, callbackURLScheme: "presentationviewer") { result, error in
                     if let result { continuation.resume(returning: result) } else { continuation.resume(throwing: error ?? CloudError.authentication) }
@@ -152,9 +153,10 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
         guard identity.issuer == config.issuer.absoluteString, !identity.subject.isEmpty, old == nil || old?.subject == identity.subject else { throw CloudError.authentication }
         return CloudTokens(access: reply.access_token, refresh: refresh, expires: Date().addingTimeInterval(TimeInterval(reply.expires_in)), subject: identity.subject)
     }
-    func accessToken() async throws -> String {
+    func accessToken() async throws -> String { try await accessToken(forceRefresh: false) }
+    func accessToken(forceRefresh: Bool) async throws -> String {
         guard let tokens else { throw CloudError.authentication }
-        if tokens.expires > Date().addingTimeInterval(60) { return tokens.access }
+        if !forceRefresh, tokens.expires > Date().addingTimeInterval(60) { return tokens.access }
         if let refreshTask { return try await refreshTask.value }
         let expectedGeneration = generation
         let task = Task { @MainActor in
@@ -164,6 +166,15 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
         }
         refreshTask = task; defer { refreshTask = nil }
         return try await task.value
+    }
+    func organizationSyncConnection(transport: URLSession? = nil) throws -> AuthenticatedSyncConnection {
+        guard let expected = subject else { throw CloudError.authentication }
+        return try AuthenticatedSyncConnection(baseURL: config.api, issuer: config.issuer.absoluteString, subject: expected, session: transport) { [weak self] refresh in
+            guard let self else { throw CloudError.authentication }
+            let token = try await self.accessToken(forceRefresh: refresh)
+            guard let subject = await self.subject else { throw CloudError.authentication }
+            return OrganizationAccess(token: token, issuer: self.config.issuer.absoluteString, subject: subject)
+        }
     }
     func logout() async {
         guard !working else { return }; working = true; defer { working = false }

@@ -34,3 +34,11 @@ Simulatorのサンプルモードを`--test-library-sync`で明示起動した�
 初回取得/確定/送信は10分の同じ予約内で1回扱い。分割データ要求12個、各要求の送信は初回込み3回まで。再起動/切断/管理復元で利用者台帳を消さず、サーバーが最終判定する。正規アプリの同意は1回専用challengeで予約し、使い回さない。模擬は単一利用者であり、Cognito subとS3 CASによる本番判定は次段階。
 
 共通28/Mac26/iOS64、実HTTPの2端末合算/ACK喪失/再起動/追加/10並行5許可と専用ツールの両画面を確認。AWS/普段の本棚/実機iPhoneは変更なし。正本：隣接diagram-design-system/docs/organization-sync-quota.md。料金見積もりでは5回をHTTP5要求とせず、制御通信/再試行/台帳書込を加えてAWS変更前に再計算する。
+
+## 認証付きHTTPSと分割（2026-10-18、未有効化）
+
+CloudOIDC.organizationSyncConnectionは既存Keychainの同じ利用者からBearerを提供する。401時の更新はforceRefresh経由で1回だけ、403や別subjectは停止。既存のaccessToken()と通常login()を維持し、追加scopeが必要なときだけlogin(organizationSync:true)を明示的に呼ぶ。実Cognitoへは接続していない。
+
+CloudLibraryView/StoreにsyncConnectionを明示注入し、enableTestSyncの隔離本棚だけへ渡す。production/既定起動へは接続しない。共有SyncLabSessionはbootstrapの固定UUIDとアカウントを記録し、50件/256KiB（小さい交渉上限にも対応）で分割。途中失敗は確認済み分だけ確定し、未確認の操作ID/送信待ち/待機を保持して再送する。
+
+iOS XCTestは旧機能を含む66件。既存OIDC→Bearer/bootstrapと日本語JSONのバイト分割をURLProtocolで確認し、通常本棚へ接続しないことも検査する。共通層のMac実行バイナリでは、ローカルTLSの125フォルダ初回統合/途中ACK喪失/待機と再起動/両方向反映を確認。実iPhoneのTLSや新しいログイン画面の操作を確認済みとは扱わない。詳細と再現コマンドは隣接diagram-design-systemのdocs/organization-sync-https.mdを正とする。AWS/実機/既存資料/保存済み資料は変更していない。

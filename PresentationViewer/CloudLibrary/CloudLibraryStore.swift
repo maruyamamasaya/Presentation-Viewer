@@ -25,8 +25,9 @@ final class CloudLibraryStore: ObservableObject {
     private var pendingDetails: [String: Task<CloudDetail, Error>] = [:]
     private let files: CloudFileStore
     private let enableTestSync: Bool
+    private let syncConnection: AuthenticatedSyncConnection?
     private var testSync: SyncLabSession?
-    init(api: any CloudLibraryAPI = MockCloudAPI(), files: CloudFileStore, enableTestSync: Bool = false) { self.api = api; self.files = files; self.enableTestSync = enableTestSync }
+    init(api: any CloudLibraryAPI = MockCloudAPI(), files: CloudFileStore, enableTestSync: Bool = false, syncConnection: AuthenticatedSyncConnection? = nil) { self.syncConnection = syncConnection; self.api = api; self.files = files; self.enableTestSync = enableTestSync }
     func loadNextPage(cursor: String) async {
         while refreshing {
             do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
@@ -100,7 +101,7 @@ final class CloudLibraryStore: ObservableObject {
             })
             let seed = (try? await binding.read()) ?? OrganizationState<OrganizationDocument>()
             let documents = items.map { OrganizationDocument(id: $0.id, title: $0.title, type: $0.type, version: $0.version, formats: $0.formats.map(\.rawValue), pageCount: $0.pageCount, tags: $0.tags) }
-            let session = SyncLabSession(directory: await files.testLibrarySyncDirectory(), seed: seed, documents: documents, binding: binding, rateLimited: true)
+            let session = SyncLabSession(directory: await files.testLibrarySyncDirectory(), seed: seed, documents: documents, binding: binding, rateLimited: true, connection: syncConnection)
             testSync = session; return session
         }
         await reloadSaved()

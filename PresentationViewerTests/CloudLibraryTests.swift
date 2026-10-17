@@ -5,6 +5,35 @@ import LibraryOrganization
 @testable import PresentationViewer
 
 final class CloudLibraryTests: XCTestCase {
+    @MainActor func testIOSOIDCProvidesBearerForHTTPSBootstrapAndByteBoundedBatches() async throws {
+        let config = CloudConnection(issuer: URL(string:"https://cognito-idp.ap-northeast-1.amazonaws.com/ap-northeast-1_Test")!,domain:URL(string:"https://test.auth.ap-northeast-1.amazoncognito.com")!,clientID:"isolated-sync-test",api:URL(string:"https://api.example")!,artifactHosts:["assets.example"],redirect:"presentationviewer://oauth/callback")
+        let auth = try CloudOIDC(config:config,readTokens:{ CloudTokens(access:"test-bearer",refresh:"unused",expires:Date().addingTimeInterval(3600),subject:"test-owner") },readCachedNamespace:{ nil })
+        let library = UUID()
+        OIDCTestProtocol.respond = { request in
+            XCTAssertEqual(request.url?.absoluteString,"https://api.example/v1/organization/bootstrap")
+            XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer test-bearer")
+            return try JSONSerialization.data(withJSONObject:["libraryID":library.uuidString,"protocolVersion":1,"limit":5,"windowSeconds":3600,"maxOperations":50,"maxBodyBytes":4096])
+        }
+        defer { OIDCTestProtocol.respond = nil }
+        let settings = URLSessionConfiguration.ephemeral; settings.protocolClasses = [OIDCTestProtocol.self]
+        let connection = try auth.organizationSyncConnection(transport:URLSession(configuration:settings))
+        let bootstrap = try await connection.bootstrap()
+        let transport = try AuthenticatedOrganizationTransport<String>(connection:connection,bootstrap:bootstrap,attemptID:UUID())
+        let operations = (0..<51).map { SyncOperation<String>(key:"tag/\($0)",expectedRevision:0,value:.tag(String(repeating:"日本語",count:60))) }
+        let batch = try transport.batch(libraryID:library,operations:operations)
+        XCTAssertGreaterThan(batch.count,0); XCTAssertLessThan(batch.count,50)
+        let bytes = try JSONEncoder().encode(LimitedSyncRequest(action:"sync",libraryID:library,attemptID:transport.attemptID,operations:batch))
+        XCTAssertLessThanOrEqual(bytes.count,4096)
+    }
+    @MainActor func testHTTPSConnectionOnlyAttachesToIsolatedTestLibrary() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let connection = try AuthenticatedSyncConnection(baseURL: URL(string: "https://api.example")!, issuer: "https://issuer.example", subject: "test-owner") { _ in throw OrganizationConnectionError.authentication }
+        let ordinary = CloudLibraryStore(files: files, syncConnection: connection)
+        let ordinarySession = await ordinary.makeSyncLab(); XCTAssertNil(ordinarySession.httpsConnection)
+        let isolated = CloudLibraryStore(files: files, enableTestSync: true, syncConnection: connection)
+        let isolatedSession = await isolated.makeSyncLab(); XCTAssertEqual(isolatedSession.httpsConnection?.identityKey, connection.identityKey)
+        XCTAssertFalse(isolatedSession.connected)
+    }
     @MainActor func testSyncFactoryPreservesLiveOrganizationAndSavedFiles() async throws {
         let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
         let store = CloudLibraryStore(api: MockCloudAPI(), files: files); await store.refresh()
