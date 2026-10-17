@@ -100,7 +100,7 @@ final class CloudLibraryStore: ObservableObject {
             })
             let seed = (try? await binding.read()) ?? OrganizationState<OrganizationDocument>()
             let documents = items.map { OrganizationDocument(id: $0.id, title: $0.title, type: $0.type, version: $0.version, formats: $0.formats.map(\.rawValue), pageCount: $0.pageCount, tags: $0.tags) }
-            let session = SyncLabSession(directory: await files.testLibrarySyncDirectory(), seed: seed, documents: documents, binding: binding)
+            let session = SyncLabSession(directory: await files.testLibrarySyncDirectory(), seed: seed, documents: documents, binding: binding, rateLimited: true)
             testSync = session; return session
         }
         await reloadSaved()
