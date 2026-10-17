@@ -1,8 +1,11 @@
 import SwiftUI
+import LibraryOrganization
+import LibraryOrganizationUI
 import PDFKit
 
 @MainActor
 final class CloudLibraryStore: ObservableObject {
+    @Published private(set) var organization = OrganizationState<CloudDiagram>()
     @Published private(set) var classifications: [String: LibraryClassification] = [:]
     @Published private(set) var collections: [CloudCollection] = []
     @Published private(set) var hiddenDiagrams: [CloudDiagram] = []
@@ -11,6 +14,8 @@ final class CloudLibraryStore: ObservableObject {
     @Published private(set) var saved: [SavedCloudFile] = []
     @Published private(set) var offline = false
     @Published private(set) var busy = false
+    @Published private(set) var refreshing = false
+    @Published private(set) var paginationFailed = false
     @Published private(set) var nextCursor: String?
     @Published var errorMessage: String?
     @Published var notice: String?
@@ -20,25 +25,46 @@ final class CloudLibraryStore: ObservableObject {
     private var pendingDetails: [String: Task<CloudDetail, Error>] = [:]
     private let files: CloudFileStore
     init(api: any CloudLibraryAPI = MockCloudAPI(), files: CloudFileStore) { self.api = api; self.files = files }
+    func loadNextPage(cursor: String) async {
+        while refreshing {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+        }
+        guard !Task.isCancelled, nextCursor == cursor else { return }
+        await refresh(query: listedQuery, scope: listedScope, more: true)
+    }
     func refresh(query: String = "", scope: String = "all", more: Bool = false) async {
-        while busy {
+        if more && (refreshing || nextCursor == nil) { return }
+        while refreshing {
             do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
         }
         guard !Task.isCancelled else { return }
-        busy = true; defer { busy = false }
+        paginationFailed = false
+        refreshing = true; defer { refreshing = false }
         do {
             let append = more && query == listedQuery && scope == listedScope
-            classifications = try await files.classifications(); collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams()
+            organization = try await files.organization(); classifications = try await files.classifications(); collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams()
             saved = try await files.records()
             localDiagrams = try await files.cachedDiagrams()
             let result = try await api.list(query: query, cursor: append ? nextCursor : nil, scope: scope)
             guard !Task.isCancelled else { return }
             items = append ? items + result.items.filter { new in !items.contains(where: { $0.id == new.id }) } : result.items
+            try? await files.cacheCatalog(items)
             offline = false
             listedQuery = query; listedScope = scope
-            nextCursor = result.nextCursor; saved = try await files.records(); errorMessage = nil
+            nextCursor = append && result.nextCursor == nextCursor ? nil : result.nextCursor; saved = try await files.records(); errorMessage = nil
         } catch {
             guard !Task.isCancelled else { return }
+            if more {
+                paginationFailed = true
+                notice = "追加の資料を取得できませんでした。下に引いて再読み込みできます。"
+                return
+            }
+            if !items.isEmpty {
+                errorMessage = nil
+                notice = "端末の一覧を表示しています。接続時に更新してください。"
+                nextCursor = nil
+                return
+            }
             do {
                 items = try await files.cachedDiagrams()
                 saved = try await files.records()
@@ -49,6 +75,40 @@ final class CloudLibraryStore: ObservableObject {
                 } else { errorMessage = message(error) }
             } catch { errorMessage = message(error) }
         }
+    }
+    func makeSyncLab() async -> SyncLabSession {
+        await reloadSaved()
+        func document(_ member: CloudDiagram) -> OrganizationDocument {
+            OrganizationDocument(id: member.id, title: member.title, type: member.type, version: member.version, formats: member.formats.map(\.rawValue), pageCount: member.pageCount, tags: member.tags)
+        }
+        var seed = OrganizationState<OrganizationDocument>()
+        seed.folders = organization.folders; seed.folderOrder = organization.folderOrder; seed.assignments = organization.assignments
+        seed.classifications = classifications
+        seed.collections = collections.map { ReadingCollection(id: $0.id, title: $0.title, members: $0.members.map(document)) }
+        var seen = Set<String>()
+        let documents = (items + localDiagrams + saved.map(\.diagram) + collections.flatMap(\.members)).map(document).filter { seen.insert($0.id).inserted }
+        return SyncLabSession(directory: await files.syncLabDirectory(), seed: seed, documents: documents)
+    }
+    func createFolder(_ name: String, parentID: UUID? = nil) async -> Bool {
+        do { organization = try await files.createFolder(name: name, parentID: parentID); return true }
+        catch { errorMessage = message(error); return false }
+    }
+    func moveDocuments(_ ids: Set<String>, to folderID: UUID?) async -> Bool {
+        let known = Set((items + localDiagrams + saved.map(\.diagram) + collections.flatMap(\.members)).map { $0.id.lowercased() })
+        guard !ids.isEmpty, Set(ids.map { $0.lowercased() }).isSubset(of: known) else { errorMessage = CloudError.invalidResponse.errorDescription; return false }
+        do { organization = try await files.moveDocuments(ids, to: folderID); return true }
+        catch { errorMessage = message(error); return false }
+    }
+    func removeFolder(_ id: UUID) async -> Bool {
+        do { organization = try await files.removeOrganizationFolder(id); return true }
+        catch { errorMessage = message(error); return false }
+    }
+    func folderPath(_ id: UUID) -> String {
+        var names: [String] = []; var next: UUID? = id; var seen = Set<UUID>()
+        while let current = next, seen.insert(current).inserted, let folder = organization.folders.first(where: { $0.id == current }) {
+            names.insert(folder.name, at: 0); next = folder.parentID
+        }
+        return names.joined(separator: " / ")
     }
     func classification(_ diagram: CloudDiagram) -> LibraryClassification {
         classifications[diagram.id.lowercased()] ?? LibraryClassification(tags: LibraryClassification.normalizedTags(diagram.tags))
@@ -128,7 +188,9 @@ final class CloudLibraryStore: ObservableObject {
         return saved.filter { $0.diagram.id.lowercased() == diagram.id.lowercased() && $0.diagram.version == diagram.version }.map(\.file)
     }
     func reloadSaved() async {
-        do { classifications = try await files.classifications(); collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records(); localDiagrams = try await files.cachedDiagrams(); if items.isEmpty { items = try await files.cachedDiagrams(); offline = true } } catch { errorMessage = message(error) }
+        do {
+            if items.isEmpty { items = (try? await files.cachedCatalog()) ?? [] }
+            organization = try await files.organization(); classifications = try await files.classifications(); collections = try await files.collections(); hiddenDiagrams = try await files.hiddenDiagrams(); saved = try await files.records(); localDiagrams = try await files.cachedDiagrams(); if items.isEmpty { items = try await files.cachedDiagrams(); offline = true } } catch { errorMessage = message(error) }
     }
     func detail(_ diagram: CloudDiagram) async throws -> CloudDetail {
         try diagram.validate()

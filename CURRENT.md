@@ -79,3 +79,15 @@ Phase 11B-3：実Cognito設定・S3公開ブロックを読取確認。本人登
 2026-10-15：iOS内の20MB制限で2040年40ページ資料が開けない問題を修正。承認済みID/版/ファイルサイズ/SHA256の原本PDF/PPTXだけ許可し、他資料の制限を維持。53 XCTest（実29.64MB PDFの保存/40ページ/オフライン再表示含む）・実機署名build合格。[仕様・検証](docs/large-presentation-size-fix.md)。
 
 同修正版をVesperaへ更新・起動成功。端末内資料と認証情報を保持。本人の今回資料の表示確認は待機。[記録](docs/large-presentation-size-fix.md)。
+
+2026-10-17：一覧末尾の自動追加、一覧キャッシュの先行復元、認証復元失敗時の端末コピー閲覧、共通5GB一時キャッシュ整理を追加。[仕様・検証](docs/incremental-library.md)。最終検証結果は同文書を参照。
+
+スクロール読込版の実機反映（2026-10-17 JST）：本人依頼後、Vesperaへ署名build/codesign検証・更新インストール・更新版起動成功。実機操作は本人確認待ち。[記録](docs/incremental-library.md)。
+
+2026-10-17：整理の共有SwiftパッケージLibraryOrganizationを隣接diagram-design-system/packagesから参照。分類/タグ/まとめのデータ型をtypealiasへ移し、既存JSON・利用者分離・まとめの閲覧動作を維持。同期・フォルダUI追加・実機配布は今回なし。詳細はdocs/shared-organization.md。
+
+2026-10-17：共有整理パッケージを使い、クラウド資料の本棚フォルダ（全て/未整理/階層）と複数選択一括移動を追加。タグ/まとめ/保存済みは既存のまま、利用者別organization.jsonのみ追加。同期/ローカル外部資料タブは変更なし。操作・検証はdocs/library-folders.md。実機配布なし。
+
+フォルダ整理版の実機反映（2026-10-17 22:03 JST）：本人依頼でVesperaへ既存署名/同Bundle IDの上書き更新・起動成功。アンインストール/保存資料削除なし。実機のフォルダ操作と既存資料の表示は本人確認待ち。[記録](docs/library-folders.md)。
+
+2026-10-17：同期の検証画面を共有LibraryOrganizationUIから接続。初回統合・状態・競合解決・再試行は別の検証コピーに限定し、元の設定へ書戻さない。iOS60 XCTest合格、HTTP共通セッション成功。新画面の実タップはツール接続タイムアウトで未確認。実機配布/AWS変更なし。[操作](docs/local-sync-ui.md)。

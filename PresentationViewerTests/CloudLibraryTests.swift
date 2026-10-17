@@ -4,6 +4,143 @@ import UIKit
 @testable import PresentationViewer
 
 final class CloudLibraryTests: XCTestCase {
+    @MainActor func testSyncFactoryPreservesLiveOrganizationAndSavedFiles() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: MockCloudAPI(), files: files); await store.refresh()
+        let diagram = try XCTUnwrap(store.items.first { CloudLibraryKind.illustrations.contains($0) && ($0.formats.contains(.png) || $0.formats.contains(.pdf)) })
+        let classified = await store.setClassification(diagram, value: LibraryClassification(group: .work, tags: ["保持するタグ"])); XCTAssertTrue(classified)
+        let created = await store.createFolder("保持するフォルダ"); XCTAssertTrue(created)
+        let folder = try XCTUnwrap(store.organization.folders.first)
+        let moved = await store.moveDocuments([diagram.id], to: folder.id); XCTAssertTrue(moved)
+        let collection = CloudCollection(id: UUID(), title: "保持するまとめ", members: [diagram])
+        let collected = await store.saveCollection(collection); XCTAssertTrue(collected)
+        let urls = ["organization.json", "classifications.json", "collections.json"].map { root.appendingPathComponent("saved/" + $0) }
+        let before = try urls.map { try Data(contentsOf: $0) }
+        let session = await store.makeSyncLab()
+        XCTAssertFalse(session.connected)
+        XCTAssertEqual(session.state.folders.first?.id, folder.id)
+        XCTAssertEqual(session.state.collections.first?.id, collection.id)
+        XCTAssertEqual(session.state.collections.first?.members.first?.id, diagram.id.lowercased())
+        XCTAssertEqual(session.state.classifications[diagram.id.lowercased()]?.tags, ["保持するタグ"])
+        session.clear()
+        XCTAssertEqual(try urls.map { try Data(contentsOf: $0) }, before)
+        XCTAssertEqual(store.collections, [collection])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("saved/sync-lab/checkpoint.json").path))
+    }
+    @MainActor func testFoldersBatchMoveRestoreAndKeepLegacyMetadata() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: MockCloudAPI(), files: files)
+        await store.refresh()
+        let first = try XCTUnwrap(store.items.first)
+        let second = CloudDiagram(id: UUID().uuidString.lowercased(), title: "保存済み図", type: "illustration", version: 1, formats: [.pdf], pageCount: 1, tags: [])
+        let sample = try XCTUnwrap(store.items.first { CloudLibraryKind.illustrations.contains($0) && $0.formats.contains(.pdf) })
+        let collection = CloudCollection(id: UUID(), title: "従来のまとめ", members: [sample])
+        let classification = LibraryClassification(group: .work, tags: ["既存タグ"])
+        _ = try await files.setClassification(first, value: classification)
+        _ = try await files.saveCollection(collection)
+        let detail = try await MockCloudAPI().detail(id: sample.id, version: sample.version)
+        let pdf = try XCTUnwrap(detail.files.first { $0.format == .pdf })
+        let grant = try await MockCloudAPI().access(diagram: sample, file: pdf)
+        let bytes = try await MockCloudAPI().download(grant)
+        try await files.save(bytes, record: SavedCloudFile(diagram: second, file: pdf))
+        await store.reloadSaved()
+        let created = await store.createFolder("親"); XCTAssertTrue(created)
+        let parent = try XCTUnwrap(store.organization.folders.first)
+        let childCreated = await store.createFolder("子", parentID: parent.id); XCTAssertTrue(childCreated)
+        let child = try XCTUnwrap(store.organization.folders.last)
+        let moved = await store.moveDocuments([first.id, second.id], to: child.id); XCTAssertTrue(moved)
+        let restored = CloudLibraryStore(api: OfflineAPI(), files: files)
+        await restored.reloadSaved()
+        XCTAssertEqual(restored.organization.assignments.count, 2)
+        XCTAssertEqual(restored.folderPath(child.id), "親 / 子")
+        XCTAssertEqual(restored.classifications[first.id.lowercased()], classification)
+        XCTAssertEqual(restored.collections, [collection])
+        XCTAssertEqual(restored.saved.count, 1)
+        let unfiled = await restored.moveDocuments([first.id, second.id], to: nil); XCTAssertTrue(unfiled)
+        XCTAssertTrue(restored.organization.assignments.isEmpty)
+        let movedAgain = await restored.moveDocuments([first.id], to: child.id); XCTAssertTrue(movedAgain)
+        let removed = await restored.removeFolder(parent.id); XCTAssertTrue(removed)
+        XCTAssertTrue(restored.organization.folders.isEmpty)
+        XCTAssertTrue(restored.organization.assignments.isEmpty)
+        XCTAssertEqual(restored.collections, [collection]); XCTAssertEqual(restored.saved.count, 1)
+        let other = try CloudFileStore(saved: root.appendingPathComponent("other"), cache: root.appendingPathComponent("other-cache"))
+        let isolated = try await other.organization(); XCTAssertTrue(isolated.folders.isEmpty)
+    }
+    @MainActor func testFolderFailureLeavesAssignmentsAndLegacyFilesUntouched() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let store = CloudLibraryStore(api: MockCloudAPI(), files: files); await store.refresh()
+        let created = await store.createFolder("保持"); XCTAssertTrue(created)
+        let first = try XCTUnwrap(store.items.first)
+        let id = try XCTUnwrap(store.organization.folders.first?.id)
+        let moved = await store.moveDocuments([first.id], to: id); XCTAssertTrue(moved)
+        let before = store.organization.assignments
+        let rejected = await store.moveDocuments([UUID().uuidString], to: id); XCTAssertFalse(rejected)
+        let invalid = await store.moveDocuments([first.id], to: UUID()); XCTAssertFalse(invalid)
+        let url = root.appendingPathComponent("saved/organization.json")
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        let failed = await store.moveDocuments([first.id], to: nil); XCTAssertFalse(failed)
+        XCTAssertEqual(store.organization.assignments, before)
+    }
+    @MainActor
+    func testCatalogRestoresWithoutDocumentDownloadAndSurvivesRefreshFailure() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let api = CacheCountingAPI()
+        let online = CloudLibraryStore(api: api, files: files)
+        await online.refresh()
+        let expected = online.items
+        XCTAssertFalse(expected.isEmpty)
+        let restored = CloudLibraryStore(api: OfflineAPI(), files: files)
+        await restored.reloadSaved()
+        XCTAssertEqual(restored.items, expected)
+        await restored.refresh()
+        XCTAssertEqual(restored.items, expected)
+        XCTAssertNil(restored.errorMessage)
+        let counts = await api.counts()
+        XCTAssertEqual(counts, [0, 0, 0])
+    }
+
+    func testCacheBudgetEvictsOldestAcrossNamespacesAndKeepsSavedFiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shared = root.appendingPathComponent("cache")
+        let files = try CloudFileStore(saved: root.appendingPathComponent("saved"), cache: shared.appendingPathComponent("owner"), cacheLimit: 4096, cacheRoot: shared)
+        let other = shared.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let old = other.appendingPathComponent("old.bin")
+        try Data(repeating: 0, count: 4000).write(to: old)
+        let saved = root.appendingPathComponent("saved/keep.bin")
+        try Data(repeating: 1, count: 50).write(to: saved)
+        let items = try await MockCloudAPI().list(query: "", cursor: nil).items
+        try await files.cacheCatalog(items)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.path))
+        let catalog = try await files.cachedCatalog()
+        XCTAssertEqual(catalog, items)
+        XCTAssertEqual(CloudFileStore.maximumCacheBytes, 5_000_000_000)
+    }
+
+    @MainActor
+    func testPaginationDeduplicatesAndFailedAppendKeepsListAndCursor() async throws {
+        let (files, root) = try temporaryStore(); defer { try? FileManager.default.removeItem(at: root) }
+        let api = PagingAPI()
+        let store = CloudLibraryStore(api: api, files: files)
+        await store.refresh()
+        let first = store.items
+        XCTAssertEqual(store.nextCursor, "second")
+        await api.setFailure(true)
+        await store.refresh(more: true)
+        XCTAssertEqual(store.items, first)
+        XCTAssertEqual(store.nextCursor, "second")
+        await api.setFailure(false)
+        await store.refresh(more: true)
+        XCTAssertEqual(Set(store.items.map(\.id)).count, store.items.count)
+        XCTAssertGreaterThan(store.items.count, first.count)
+        XCTAssertNil(store.nextCursor)
+        await store.refresh()
+        XCTAssertEqual(store.items, first)
+    }
+
     func testStorageCostEstimate() {
         XCTAssertEqual(StorageCostEstimate.monthlyYen(gib: 100, usdPerGiB: 0.025, yenPerUSD: 150, taxPercent: 10)!, 412.5, accuracy: 0.00001)
         XCTAssertEqual(StorageCostEstimate.monthlyYen(gib: 0, usdPerGiB: 0.025, yenPerUSD: 150, taxPercent: 10), 0)
@@ -331,6 +468,16 @@ final class CloudLibraryTests: XCTestCase {
         state.initialize(); XCTAssertFalse(state.failed); XCTAssertNotNil(state.auth)
         let auth = state.auth
         state.initialize(); XCTAssertEqual(attempts, 2); XCTAssertTrue(auth === state.auth)
+    }
+    @MainActor
+    func testLocalNamespaceAvailableWithoutLoginAndRejectsInvalidNamespace() throws {
+        let config = try CloudConnection.bundled()
+        let previous = cloudHash(Data("previous-owner".utf8))
+        let auth = try CloudOIDC(config: config, readTokens: { throw CloudError.authentication }, readCachedNamespace: { previous })
+        XCTAssertNil(auth.namespace)
+        XCTAssertEqual(auth.libraryNamespace, previous)
+        let invalid = try CloudOIDC(config: config, readTokens: { nil }, readCachedNamespace: { "../another-owner" })
+        XCTAssertNil(invalid.libraryNamespace)
     }
     @MainActor
     func testConfiguredConnectionSurvivesUnavailableSavedLogin() async throws {
@@ -691,4 +838,17 @@ private actor CacheCountingAPI: CloudLibraryAPI {
         return try await mock.access(diagram: original.diagram, file: file)
     }
     func download(_ grant: CloudGrant) async throws -> Data { downloads += 1; return try await mock.download(grant) }
+}
+
+private actor PagingAPI: CloudLibraryAPI {
+    private var failure = false
+    func setFailure(_ value: Bool) { failure = value }
+    func list(query: String, cursor: String?) async throws -> CloudList {
+        if failure { throw CloudError.unavailable }
+        let items = try await MockCloudAPI().list(query: "", cursor: nil).items
+        return CloudList(items: cursor == nil ? [items[0]] : items, nextCursor: cursor == nil ? "second" : nil)
+    }
+    func detail(id: String, version: Int) async throws -> CloudDetail { throw CloudError.unavailable }
+    func access(diagram: CloudDiagram, file: CloudFile) async throws -> CloudGrant { throw CloudError.unavailable }
+    func download(_ grant: CloudGrant) async throws -> Data { throw CloudError.unavailable }
 }

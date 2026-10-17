@@ -85,7 +85,7 @@ private struct AppLibraryTabs: View {
         .toolbar(UIDevice.current.userInterfaceIdiom == .phone ? .hidden : .visible, for: .tabBar)
         .environment(\.libraryDestination, $selectedTab)
         .overlay {
-            if UIDevice.current.userInterfaceIdiom == .phone && selectedTab != "local" && (production && connection.auth?.namespace == nil || (try? files.get()) == nil) {
+            if UIDevice.current.userInterfaceIdiom == .phone && selectedTab != "local" && (production && connection.auth?.libraryNamespace == nil || (try? files.get()) == nil) {
                 LibraryDrawer(isPresented: $connectionDrawer) {
                     Button("接続設定") { connectionDrawer = false; settings = true }.frame(minHeight: 44)
                 }.environment(\.libraryDestination, $selectedTab)
@@ -172,7 +172,7 @@ private struct CloudProductionView: View {
     let onSettings: () -> Void
     var body: some View {
         Group {
-            if let namespace = auth.namespace {
+            if let namespace = auth.libraryNamespace {
                 switch Result(catching: { (try CloudFileStore.applicationStore(namespace: namespace), try HTTPSCloudAPI(baseURL: auth.config.api, allowedArtifactHosts: Set(auth.config.artifactHosts), tokens: auth)) }) {
                 case .success(let connection):
                     CloudLibraryView(files: connection.0, kind: kind, api: connection.1, production: true, onSettings: onSettings, onLogout: { Task { await auth.logout() } }, onReauthenticate: { Task { await auth.login() } }).id("\(namespace)-\(auth.loginRevision)")

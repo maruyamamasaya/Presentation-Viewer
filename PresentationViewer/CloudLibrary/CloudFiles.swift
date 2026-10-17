@@ -1,4 +1,5 @@
 import Foundation
+import LibraryOrganization
 
 struct SavedCloudFile: Codable, Identifiable, Sendable {
     let diagram: CloudDiagram
@@ -9,26 +10,19 @@ struct SavedCloudFile: Codable, Identifiable, Sendable {
     func validate() throws { try file.validate(for: diagram) }
 }
 
-enum LibraryGroup: String, Codable, CaseIterable, Sendable {
-    case work = "仕事", personal = "私用", other = "その他"
-}
-
-struct LibraryClassification: Codable, Equatable, Sendable {
-    var group: LibraryGroup = .other
-    var tags: [String] = []
-    static func normalizedTags(_ tags: [String]) -> [String] {
-        var seen = Set<String>()
-        return tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
-    }
-}
+typealias LibraryGroup = LibraryOrganization.LibraryGroup
+typealias LibraryClassification = LibraryOrganization.LibraryClassification
 
 actor CloudFileStore {
     private let saved: URL
     private let cache: URL
-    init(saved: URL, cache: URL) throws {
+    private static let cacheLock = NSLock()
+    static let maximumCacheBytes: Int64 = 5_000_000_000
+    private let cacheLimit: Int64
+    private let cacheRoot: URL
+    init(saved: URL, cache: URL, cacheLimit: Int64 = CloudFileStore.maximumCacheBytes, cacheRoot: URL? = nil) throws {
         guard saved.standardizedFileURL != cache.standardizedFileURL else { throw CloudError.invalidResponse }
-        self.saved = saved; self.cache = cache
+        self.saved = saved; self.cache = cache; self.cacheLimit = max(0, cacheLimit); self.cacheRoot = cacheRoot ?? cache
         for folder in [saved, cache] { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
     }
     static func applicationStore(namespace: String? = nil) throws -> CloudFileStore {
@@ -37,9 +31,35 @@ actor CloudFileStore {
         let cache = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("DiagramLibrary")
         if let namespace {
             guard namespace.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw CloudError.invalidResponse }
-            return try CloudFileStore(saved: saved.appendingPathComponent(namespace), cache: cache.appendingPathComponent(namespace))
+            return try CloudFileStore(saved: saved.appendingPathComponent(namespace), cache: cache.appendingPathComponent(namespace), cacheRoot: cache)
         }
         return try CloudFileStore(saved: saved, cache: cache)
+    }
+    func syncLabDirectory() -> URL { saved.appendingPathComponent("sync-lab") }
+    func organization() throws -> OrganizationState<CloudDiagram> {
+        let url = saved.appendingPathComponent("organization.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return OrganizationState() }
+        return try OrganizationState.load(Data(contentsOf: url))
+    }
+    private func writeOrganization(_ value: OrganizationState<CloudDiagram>) throws {
+        try JSONEncoder().encode(value).write(to: saved.appendingPathComponent("organization.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+    func createFolder(name: String, parentID: UUID? = nil) throws -> OrganizationState<CloudDiagram> {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var value = try organization()
+        guard !name.isEmpty, name.count <= 120, parentID == nil || value.folders.contains(where: { $0.id == parentID }) else { throw CloudError.invalidResponse }
+        value.folders.append(OrganizationFolder(name: name, parentID: parentID))
+        try writeOrganization(value); return value
+    }
+    func moveDocuments(_ ids: Set<String>, to folderID: UUID?) throws -> OrganizationState<CloudDiagram> {
+        var value = try organization()
+        guard folderID == nil || value.folders.contains(where: { $0.id == folderID }), ids.allSatisfy({ UUID(uuidString: $0) != nil }) else { throw CloudError.invalidResponse }
+        value.moveBooks(Set(ids.map { $0.lowercased() }), to: folderID)
+        try writeOrganization(value); return value
+    }
+    func removeOrganizationFolder(_ id: UUID) throws -> OrganizationState<CloudDiagram> {
+        var value = try organization(); value.removeFolder(id)
+        try writeOrganization(value); return value
     }
     func costHistory() throws -> [StorageCostSnapshot] {
         let url = saved.appendingPathComponent("storage-cost-history.json")
@@ -121,7 +141,8 @@ actor CloudFileStore {
         try verify(data, record: record)
         // Hash in cache name avoids overwriting a file that is currently being viewed.
         let url = cache.appendingPathComponent(record.id + "-" + record.file.sha256 + "." + record.file.format.rawValue)
-        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]); return url
+        try writeCache(data, to: url)
+        return url
     }
     /// Only verified bytes for this exact immutable version may be reused.
     func localURL(_ record: SavedCloudFile) throws -> URL? {
@@ -131,6 +152,7 @@ actor CloudFileStore {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
             try verify(Data(contentsOf: url), record: record)
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
             return url
         } catch {
             try? FileManager.default.removeItem(at: url)
@@ -158,7 +180,42 @@ actor CloudFileStore {
     }
     func cacheDetail(_ detail: CloudDetail) throws {
         try detail.validate()
-        try JSONEncoder().encode(detail).write(to: detailURL(detail.diagram), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try writeCache(JSONEncoder().encode(detail), to: detailURL(detail.diagram))
+    }
+    // Catalog metadata is restored before scanning or verifying document bytes.
+    func cachedCatalog() throws -> [CloudDiagram] {
+        try Self.cacheLock.withLock { try reserveCache(bytes: 0, replacing: cache.appendingPathComponent(".reservation")) }
+        let url = cache.appendingPathComponent("catalog.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let diagrams = try JSONDecoder().decode([CloudDiagram].self, from: Data(contentsOf: url))
+        for diagram in diagrams { try diagram.validate() }
+        return diagrams
+    }
+    func cacheCatalog(_ diagrams: [CloudDiagram]) throws {
+        for diagram in diagrams { try diagram.validate() }
+        try writeCache(JSONEncoder().encode(diagrams), to: cache.appendingPathComponent("catalog.json"))
+    }
+    private func writeCache(_ data: Data, to url: URL) throws {
+        try Self.cacheLock.withLock {
+            try reserveCache(bytes: data.count, replacing: url)
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+    private func reserveCache(bytes: Int, replacing destination: URL) throws {
+        guard Int64(bytes) <= cacheLimit else { throw CloudError.unavailable }
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+        guard let enumerator = fm.enumerator(at: cacheRoot, includingPropertiesForKeys: keys) else { throw CloudError.unavailable }
+        let entries = enumerator.allObjects.compactMap { $0 as? URL }
+            .filter { $0 != destination }
+            .compactMap { url -> (URL, Int64, Date)? in
+                guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]), values.isRegularFile == true else { return nil }
+                return (url, Int64(values.fileSize ?? 0), values.contentModificationDate ?? .distantPast)
+            }.sorted { $0.2 < $1.2 }
+        var total = entries.reduce(Int64(bytes)) { $0 + $1.1 }
+        for (url, size, _) in entries where total > cacheLimit {
+            try fm.removeItem(at: url); total -= size
+        }
     }
     /// Recover browsable copies after restart, without trusting an unverified cache file.
     func cachedDiagrams() throws -> [CloudDiagram] {

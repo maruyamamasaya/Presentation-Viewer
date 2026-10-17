@@ -79,23 +79,29 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
     @Published var message: String?
     @Published private(set) var working = false
     @Published private(set) var loginRevision = 0
+    @Published private(set) var cachedNamespace: String?
+    private var namespaceKey: String { "cloud-local-namespace-" + cloudHash(Data(config.key.utf8)) }
     private var tokens: CloudTokens?
     private var browser: ASWebAuthenticationSession?
     private var generation = UUID()
     private var refreshTask: Task<String, Error>?
     private let session: URLSession
     private var keychain: CloudKeychain { CloudKeychain(account: config.key) }
-    init(config: CloudConnection, transport: URLSession? = nil, readTokens: (() throws -> CloudTokens?)? = nil) throws {
+    init(config: CloudConnection, transport: URLSession? = nil, readTokens: (() throws -> CloudTokens?)? = nil, readCachedNamespace: (() -> String?)? = nil) throws {
         try config.validate(); self.config = config
         let settings = URLSessionConfiguration.ephemeral; settings.httpShouldSetCookies = false; settings.urlCache = nil; settings.timeoutIntervalForRequest = 30
         session = transport ?? URLSession(configuration: settings, delegate: NoRedirects(), delegateQueue: nil)
         super.init()
         do { if let readTokens { tokens = try readTokens() } else { tokens = try keychain.read() }; subject = tokens?.subject }
         catch { message = "保存済みのログイン情報を読み込めませんでした。端末のロックを解除して再試行するか、ログインしてください。" }
+        if let readCachedNamespace { cachedNamespace = readCachedNamespace() }
+        else if readTokens == nil { cachedNamespace = UserDefaults.standard.string(forKey: namespaceKey) }
+        if cachedNamespace?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) == nil { cachedNamespace = nil }
+        if readTokens == nil { rememberNamespace() }
     }
     func restoreSession() {
         guard tokens == nil, !working else { return }
-        do { tokens = try keychain.read(); subject = tokens?.subject; message = nil }
+        do { tokens = try keychain.read(); subject = tokens?.subject; rememberNamespace(); message = nil }
         catch { message = "保存済みのログイン情報を読み込めませんでした。端末のロックを解除して再試行してください。" }
     }
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -119,6 +125,7 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
             let value = try await exchange(["grant_type": "authorization_code", "client_id": config.clientID, "redirect_uri": config.redirect, "code": code, "code_verifier": verifier], old: nil)
             generation = UUID(); refreshTask?.cancel(); refreshTask = nil
             try keychain.write(value); tokens = value; subject = value.subject; message = nil
+            rememberNamespace()
             loginRevision += 1
         } catch { message = "ログインできませんでした。認証と接続設定を確認してください。" }
     }
@@ -162,11 +169,17 @@ final class CloudOIDC: NSObject, ObservableObject, CloudAccessTokenProvider, ASW
         guard !working else { return }; working = true; defer { working = false }
         generation = UUID(); refreshTask?.cancel(); refreshTask = nil
         let old = tokens
-        do { try keychain.delete(); tokens = nil; subject = nil } catch { message = "認証情報を削除できませんでした。"; return }
+        do { try keychain.delete(); tokens = nil; subject = nil; cachedNamespace = nil; UserDefaults.standard.removeObject(forKey: namespaceKey) } catch { message = "認証情報を削除できませんでした。"; return }
         if let old {
             do { _ = try await post("oauth2/revoke", values: ["client_id": config.clientID, "token": old.refresh]) }
             catch { message = "端末からログアウトしました。通信できずサーバーの失効は未確認です。" }
         }
     }
+    private func rememberNamespace() {
+        guard let namespace else { return }
+        cachedNamespace = namespace
+        UserDefaults.standard.set(namespace, forKey: namespaceKey)
+    }
+    var libraryNamespace: String? { namespace ?? cachedNamespace }
     var namespace: String? { subject.map { cloudHash(Data((config.key + "\n" + $0).utf8)) } }
 }

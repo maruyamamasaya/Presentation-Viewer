@@ -1,4 +1,5 @@
 import Foundation
+import LibraryOrganization
 import CryptoKit
 
 enum CloudError: LocalizedError {
@@ -161,15 +162,12 @@ func cloudDate(_ value: String) -> Date? {
 }
 
 /// A device-local reading collection. Membership is by document ID; the snapshot is an offline fallback.
-struct CloudCollection: Codable, Identifiable, Sendable, Equatable {
-    let id: UUID
-    var title: String
-    var members: [CloudDiagram]
+typealias CloudCollection = ReadingCollection<CloudDiagram>
+extension ReadingCollection where Member == CloudDiagram {
     func validate() throws {
-        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 120,
-              !members.isEmpty, members.count <= 100,
-              Set(members.map { $0.id.lowercased() }).count == members.count,
-              members.allSatisfy({ CloudLibraryKind.illustrations.contains($0) && ($0.formats.contains(.png) || $0.formats.contains(.pdf)) }) else { throw CloudError.invalidResponse }
+        do { try validateStructure(memberID: { $0.id.lowercased() }) }
+        catch { throw CloudError.invalidResponse }
+        guard members.allSatisfy({ CloudLibraryKind.illustrations.contains($0) && ($0.formats.contains(.png) || $0.formats.contains(.pdf)) }) else { throw CloudError.invalidResponse }
         for member in members { try member.validate() }
     }
     func resolved(using available: [CloudDiagram], hidden: [CloudDiagram]) -> [CloudDiagram] {
